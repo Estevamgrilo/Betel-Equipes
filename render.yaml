@@ -2,7 +2,7 @@ services:
   - type: web
     name: betel-equipes-staging
     runtime: node
-    plan: starter
+    plan: free
     buildCommand: npm install --no-audit --no-fund
     startCommand: npm start
     healthCheckPath: /healthz
@@ -18,6 +18,6 @@ services:
 
 databases:
   - name: betel-equipes-db
-    plan: basic-256mb
+    plan: free
     databaseName: betel_equipes
     user: betel_equipes
