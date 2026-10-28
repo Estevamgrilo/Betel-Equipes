@@ -37,6 +37,15 @@ const u={id:id(),name:body.name,email:body.email.toLowerCase().trim(),password:h
 if(url.pathname==='/api/login'&&req.method==='POST'){const u=db.users.find(u=>u.email===String(body.email||'').toLowerCase().trim());if(!u||!valid(body.password||'',u.password))return reply(res,401,{error:'Credenciais inválidas'});const t=token();db.sessions.push({userId:u.id,tokenHash:crypto.createHash('sha256').update(t).digest('hex'),expires:Date.now()+SESSION_MS});await store.save(db);return reply(res,200,{token:t,user:publicUser(u)})}
 if(url.pathname==='/api/register'&&req.method==='POST'){const invite=db.invites.find(i=>i.code===String(body.code||'').toUpperCase()&&!i.used&&i.expires>Date.now());if(!invite)return reply(res,400,{error:'Convite inválido, vencido ou utilizado'});if(!body.name||!body.email||String(body.password||'').length<10)return reply(res,400,{error:'Nome, e-mail e senha de 10 caracteres são obrigatórios'});const email=body.email.toLowerCase().trim();if(db.users.some(u=>u.email===email))return reply(res,409,{error:'E-mail já cadastrado'});const u={id:id(),name:body.name,email,password:hash(body.password),role:'volunteer',sectors:invite.sectors};invite.used=true;db.users.push(u);db.audit.push({at:new Date().toISOString(),action:'register',actor:u.id});await store.save(db);return reply(res,201,{user:publicUser(u)})}
 const user=auth(req,db);if(!user)return reply(res,401,{error:'Faça login'});
+if(url.pathname==='/api/admin/reset-test-data'&&req.method==='POST'){
+ if(user.role!=='master'||user.email!=='estevamgrilo@hotmail.com')return reply(res,403,{error:'Somente o Master autorizado pode executar a limpeza'});
+ if(body.confirmation!=='ZERAR BETEL EQUIPES'||body.keepEmail!=='estevamgrilo@hotmail.com')return reply(res,400,{error:'Confirmação de limpeza inválida'});
+ const retained=db.users.find(u=>u.id===user.id&&u.email==='estevamgrilo@hotmail.com'&&u.role==='master');
+ if(!retained)return reply(res,409,{error:'Master não encontrado; nenhuma alteração realizada'});
+ const fresh=normalize({users:[retained],invites:[],sessions:[],audit:[],sectors:[{id:'som',name:'Sonoplastia'},{id:'projecao',name:'Projeção'},{id:'iluminacao',name:'Iluminação'},{id:'transmissao',name:'Transmissão'},{id:'midia',name:'Mídia'}]});
+ fresh.events=[];fresh.assignments=[];fresh.functions=[];fresh.skills=[];fresh.unavailability=[];fresh.proposals=[];fresh.cycles=[];fresh.cycleConfig=null;
+ await store.save(fresh);return reply(res,200,{ok:true,message:'Dados de teste zerados. Apenas o Master foi preservado. Faça login novamente.',preservedEmail:retained.email});
+}
 if(url.pathname==='/api/logout'&&req.method==='POST'){
  const presented=(req.headers.authorization||'').replace(/^Bearer /,'');
  const presentedHash=crypto.createHash('sha256').update(presented).digest('hex');
