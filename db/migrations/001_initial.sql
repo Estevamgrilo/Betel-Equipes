@@ -1,0 +1,21 @@
+-- Betel Equipes V16: esquema inicial PostgreSQL. Não migra dados JSON automaticamente.
+BEGIN;
+CREATE TABLE IF NOT EXISTS users (id uuid PRIMARY KEY, name text NOT NULL, email text NOT NULL UNIQUE, password_hash text NOT NULL, role text NOT NULL CHECK(role IN ('master','general','sector','volunteer')), created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS sectors (id text PRIMARY KEY, name text NOT NULL);
+CREATE TABLE IF NOT EXISTS user_sectors (user_id uuid NOT NULL REFERENCES users(id), sector_id text NOT NULL REFERENCES sectors(id), PRIMARY KEY(user_id,sector_id));
+CREATE TABLE IF NOT EXISTS invites (id uuid PRIMARY KEY, code_hash text NOT NULL UNIQUE, role text NOT NULL, created_by uuid REFERENCES users(id), expires_at timestamptz NOT NULL, used_by uuid REFERENCES users(id));
+CREATE TABLE IF NOT EXISTS sessions (id uuid PRIMARY KEY, user_id uuid NOT NULL REFERENCES users(id), token_hash text NOT NULL UNIQUE, expires_at timestamptz NOT NULL);
+CREATE TABLE IF NOT EXISTS functions (id uuid PRIMARY KEY, sector_id text NOT NULL REFERENCES sectors(id), name text NOT NULL, automatic boolean NOT NULL DEFAULT false);
+CREATE TABLE IF NOT EXISTS skills (user_id uuid NOT NULL REFERENCES users(id), function_id uuid NOT NULL REFERENCES functions(id), level text NOT NULL, approved boolean NOT NULL DEFAULT false, approved_by uuid REFERENCES users(id), PRIMARY KEY(user_id,function_id));
+CREATE TABLE IF NOT EXISTS unavailability (id uuid PRIMARY KEY, user_id uuid NOT NULL REFERENCES users(id), starts_at timestamptz NOT NULL, ends_at timestamptz NOT NULL, CHECK(ends_at>starts_at));
+CREATE TABLE IF NOT EXISTS cycle_config (id integer PRIMARY KEY DEFAULT 1 CHECK(id=1), anchor date NOT NULL);
+CREATE TABLE IF NOT EXISTS cycles (id uuid PRIMARY KEY, cycle_index integer NOT NULL UNIQUE, starts_on date NOT NULL, ends_on date NOT NULL, generate_on date NOT NULL, status text NOT NULL DEFAULT 'pending_review', created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS events (id uuid PRIMARY KEY, title text NOT NULL, event_date date NOT NULL, event_time time NOT NULL, transmission text NOT NULL DEFAULT 'undefined' CHECK(transmission IN ('undefined','yes','no')), cycle_id uuid REFERENCES cycles(id), recurring_key text, created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(cycle_id,event_date,recurring_key));
+CREATE TABLE IF NOT EXISTS event_sectors (event_id uuid NOT NULL REFERENCES events(id), sector_id text NOT NULL REFERENCES sectors(id), PRIMARY KEY(event_id,sector_id));
+CREATE TABLE IF NOT EXISTS assignments (id uuid PRIMARY KEY, event_id uuid NOT NULL REFERENCES events(id), function_id uuid NOT NULL REFERENCES functions(id), user_id uuid NOT NULL REFERENCES users(id), status text NOT NULL DEFAULT 'published', created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS proposals (id uuid PRIMARY KEY, payload jsonb NOT NULL, status text NOT NULL DEFAULT 'draft', created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS audit_log (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, actor_id uuid REFERENCES users(id), action text NOT NULL, target_type text, target_id text, before_data jsonb, after_data jsonb, created_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS idx_events_date ON events(event_date);
+CREATE INDEX IF NOT EXISTS idx_assignments_user ON assignments(user_id);
+CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at);
+COMMIT;

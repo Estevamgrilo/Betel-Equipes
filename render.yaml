@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: betel-equipes-staging
+    runtime: node
+    plan: starter
+    buildCommand: npm install --no-audit --no-fund
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: betel-equipes-db
+          property: connectionString
+      - key: BETEL_SETUP_KEY
+        generateValue: true
+
+databases:
+  - name: betel-equipes-db
+    plan: basic-256mb
+    databaseName: betel_equipes
+    user: betel_equipes
