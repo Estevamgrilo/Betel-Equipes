@@ -36,7 +36,7 @@ export async function sendPendingNotifications(db){
   if(!n||n.cancelled||!u||!event||!assignment||assignment.userId!==u.id){
    job.status='cancelled';changed=true;continue;
   }
-  const link=(process.env.BETEL_PUBLIC_URL||'https://betel-equipes-staging.onrender.com').replace(/\\/$/,'')+'/plataforma.html';
+  const link=(process.env.BETEL_PUBLIC_URL||'https://betel-equipes-staging.onrender.com').replace(/[/]$/,'')+'/plataforma.html';
   let configured=false,ok=false;
   try{
    if(job.channel==='email'){
@@ -44,7 +44,7 @@ export async function sendPendingNotifications(db){
     const from=process.env.BETEL_MAIL_FROM;
     configured=!!(key&&from&&u.email);
     if(configured){
-     const payload={from,to:[u.email],subject:'Betel Equipes · '+n.title,text:['Olá, '+u.name+'!',n.title,n.message,'Acesse sua escala: '+link].join('\\n\\n')};
+     const payload={from,to:[u.email],subject:'Betel Equipes · '+n.title,text:['Olá, '+u.name+'!',n.title,n.message,'Acesse sua escala: '+link].join(String.fromCharCode(10,10))};
      const options={method:'POST',headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},body:JSON.stringify(payload),signal:AbortSignal.timeout(12000)};
      const response=await fetch('https://api.resend.com/emails',options);
      ok=response.ok;
