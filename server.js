@@ -286,14 +286,25 @@ if(url.pathname==='/api/unavailability'&&req.method==='GET'){
 if(url.pathname==='/api/unavailability/remove'&&req.method==='POST'){
  const index=db.unavailability.findIndex(x=>x.id===body.id&&x.userId===user.id);
  if(index<0)return reply(res,404,{error:'Indisponibilidade não encontrada'});
- const removed=db.unavailability.splice(index,1)[0];
- db.audit.push({at:new Date().toISOString(),actor:user.id,action:'unavailability_remove',target:removed.id});
+ const existing=db.unavailability[index],day=String(body.date||'');
+ if(day){
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(day)||day<existing.from||day>existing.to)return reply(res,400,{error:'Data fora do período de indisponibilidade'});
+  const previous=existing.from,next=existing.to;
+  db.unavailability.splice(index,1);
+  const shift=(d,n)=>{const x=new Date(d+'T12:00:00Z');x.setUTCDate(x.getUTCDate()+n);return x.toISOString().slice(0,10)};
+  if(previous<day)db.unavailability.push({id:id(),userId:user.id,from:previous,to:shift(day,-1)});
+  if(day<next)db.unavailability.push({id:id(),userId:user.id,from:shift(day,1),to:next});
+  db.audit.push({at:new Date().toISOString(),actor:user.id,action:'unavailability_remove_day',target:existing.id,date:day});
+ }else{
+  const removed=db.unavailability.splice(index,1)[0];
+  db.audit.push({at:new Date().toISOString(),actor:user.id,action:'unavailability_remove',target:removed.id});
+ }
  await store.save(db);return reply(res,200,{ok:true});
 }
 if(url.pathname==='/api/unavailability'&&req.method==='POST'){
  const from=String(body.from||''),to=String(body.to||'');
  if(!/^\d{4}-\d{2}-\d{2}$/.test(from)||!/^\d{4}-\d{2}-\d{2}$/.test(to)||from>to||!Number.isFinite(Date.parse(from))||!Number.isFinite(Date.parse(to)))return reply(res,400,{error:'Datas inválidas'});
- if(db.unavailability.some(x=>x.userId===user.id&&x.from===from&&x.to===to))return reply(res,409,{error:'Esta indisponibilidade já está cadastrada'});
+ if(db.unavailability.some(x=>x.userId===user.id&&x.from<=to&&x.to>=from))return reply(res,409,{error:'Uma ou mais datas já estão cadastradas como indisponíveis. Escolha um período sem sobreposição.'});
  db.unavailability.push({id:id(),userId:user.id,from,to});db.audit.push({at:new Date().toISOString(),actor:user.id,action:'unavailability_create'});await store.save(db);return reply(res,201,{ok:true});
 }
 if(url.pathname==='/api/schedule/preview'&&req.method==='POST'){
@@ -392,6 +403,7 @@ if(url.pathname==='/api/assignments'&&req.method==='POST'){
  if(sector==='transmissao'&&e.transmission!=='yes')return reply(res,409,{error:'Transmissão deve ser autorizada pela liderança geral antes de escalar'});
  const u=db.users.find(x=>x.id===body.userId);if(!u||!u.sectors.includes(sector))return reply(res,400,{error:'Voluntário não vinculado à equipe'});
  const functionName=String(body.functionName||'').trim().slice(0,80);if(!functionName)return reply(res,400,{error:'Informe a função'});
+ if(db.unavailability.some(x=>x.userId===u.id&&e.date>=x.from&&e.date<=x.to))return reply(res,409,{error:'Este voluntário está indisponível na data do evento. Escolha outro voluntário ou solicite que ele libere a data.'});
  const current=db.assignments.find(x=>x.eventId===e.id&&x.sector===sector&&x.functionName===functionName);
  const old=current?{userId:current.userId}:null;
  if(current){if(current.userId!==u.id){current.notificationEligible=true;current.id=id()}current.userId=u.id;current.updatedAt=new Date().toISOString()}else db.assignments.push({id:id(),eventId:e.id,sector,functionName,userId:u.id,notificationEligible:true,createdAt:new Date().toISOString()});
