@@ -68,6 +68,21 @@ if(url.pathname==='/api/admin/users'&&req.method==='GET'){
  if(user.role!=='master')return reply(res,403,{error:'Somente Master'});
  return reply(res,200,{users:db.users.map(u=>({...publicUser(u),profile:u.profile||{}}))});
 }
+if(url.pathname==='/api/admin/user-courses'&&req.method==='GET'){
+ if(user.role!=='master')return reply(res,403,{error:'Somente Master'});
+ const targetId=url.searchParams.get('userId');
+ if(!db.users.some(u=>u.id===targetId))return reply(res,404,{error:'Voluntário não encontrado'});
+ const courses=db.courses.map(course=>{
+  const lessons=course.lessons.map((lesson,index)=>{
+   const p=db.courseProgress[targetId+'|'+course.id+'|'+lesson.id];
+   return {id:lesson.id,title:lesson.title,number:index+1,percent:p?.percent||0,completed:!!p?.completed,duration:p?.duration||0,resumeAt:p?.resumeAt||0,started:!!p?.segments?.length};
+  });
+  const started=lessons.some(l=>l.started||l.completed||l.percent>0);
+  const total=lessons.length;
+  return {id:course.id,title:course.title,description:course.description,lessons,totalLessons:total,completedLessons:lessons.filter(l=>l.completed).length,percent:total?Math.round(lessons.filter(l=>l.completed).length/total*100):0,started};
+ }).filter(c=>c.started);
+ return reply(res,200,{courses});
+}
 if(url.pathname==='/api/admin/user'&&req.method==='POST'){
  if(user.role!=='master')return reply(res,403,{error:'Somente Master'});
  const target=db.users.find(u=>u.id===body.userId);if(!target)return reply(res,404,{error:'Usuário não encontrado'});
