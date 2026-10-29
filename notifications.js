@@ -34,7 +34,7 @@ export async function sendPendingNotifications(db){
   try{
    if(job.channel==='email'){
     const key=process.env.RESEND_API_KEY,from=process.env.BETEL_MAIL_FROM;configured=!!(key&&from&&u.email);
-    if(configured){const r=await fetch('https://api.resend.com/emails',{method:'POST',headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},body:JSON.stringify({from,to:[u.email],subject:'Betel Equipes · '+n.title,text:'Olá, '+u.name+'!\n\n'+n.title+'\n'+n.message+'\n\nAcesse sua escala: '+link})},signal:AbortSignal.timeout(12000));ok=r.ok;if(!ok)console.error('Notificação e-mail HTTP',r.status)}
+    if(configured){const r=await fetch('https://api.resend.com/emails',{method:'POST',headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},body:JSON.stringify({from,to:[u.email],subject:'Betel Equipes · '+n.title,text:'Olá, '+u.name+'!\n\n'+n.title+'\n'+n.message+'\n\nAcesse sua escala: '+link}),signal:AbortSignal.timeout(12000));ok=r.ok;if(!ok)console.error('Notificação e-mail HTTP',r.status)}
    }else{
     const key=process.env.WHATSAPP_ACCESS_TOKEN,phoneId=process.env.WHATSAPP_PHONE_NUMBER_ID,template=process.env.WHATSAPP_TEMPLATE_NAME,phone=cleanPhone(u.profile?.phone);
     configured=!!(key&&phoneId&&template&&phone);
