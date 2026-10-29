@@ -339,6 +339,32 @@ if(url.pathname==='/api/events'&&req.method==='POST'){
  const e={id:id(),title,date,time,sectors,transmission:'undefined',createdBy:user.id,createdAt:new Date().toISOString()};
  db.events.push(e);db.audit.push({at:new Date().toISOString(),actor:user.id,action:'event_create',target:e.id});await store.save(db);return reply(res,201,{event:e});
 }
+if(url.pathname==='/api/events/update'&&req.method==='POST'){
+ if(!['master','general'].includes(user.role))return reply(res,403,{error:'Sem permissão para editar eventos'});
+ const e=db.events.find(x=>x.id===body.eventId);
+ if(!e||user.role!=='master'&&!e.sectors.some(x=>user.sectors.includes(x)))return reply(res,404,{error:'Evento não encontrado'});
+ const title=String(body.title||'').trim().slice(0,120),date=String(body.date||''),time=String(body.time||'');
+ if(title.length<3||!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(date)||!/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(time))return reply(res,400,{error:'Informe nome, data e horário válidos'});
+ const sectors=Array.isArray(body.sectors)?[...new Set(body.sectors)].filter(x=>db.sectors.some(s=>s.id===x)&&(user.role==='master'||user.sectors.includes(x))):[];
+ if(!sectors.length)return reply(res,400,{error:'Selecione pelo menos uma equipe'});
+ if(db.assignments.some(a=>a.eventId===e.id&&!sectors.includes(a.sector)))return reply(res,409,{error:'Remova as escalas das equipes desmarcadas antes de salvar'});
+ const old={title:e.title,date:e.date,time:e.time,sectors:[...e.sectors]};
+ Object.assign(e,{title,date,time,sectors,updatedAt:new Date().toISOString()});
+ db.audit.push({at:e.updatedAt,actor:user.id,action:'event_update',target:e.id,old,new:{title,date,time,sectors}});
+ await store.save(db);return reply(res,200,{event:e});
+}
+if(url.pathname==='/api/events/delete'&&req.method==='POST'){
+ if(!['master','general'].includes(user.role))return reply(res,403,{error:'Sem permissão para excluir eventos'});
+ const e=db.events.find(x=>x.id===body.eventId);
+ if(!e||user.role!=='master'&&!e.sectors.some(x=>user.sectors.includes(x)))return reply(res,404,{error:'Evento não encontrado'});
+ const removed=db.assignments.filter(a=>a.eventId===e.id);
+ db.assignments=db.assignments.filter(a=>a.eventId!==e.id);
+ db.events=db.events.filter(x=>x.id!==e.id);
+ for(const n of db.notifications||[])if(n.eventId===e.id)n.cancelled=true;
+ for(const p of db.proposals||[])if(p.status==='draft'&&p.proposed?.some(a=>a.eventId===e.id)){p.status='invalidated';p.invalidatedAt=new Date().toISOString()}
+ db.audit.push({at:new Date().toISOString(),actor:user.id,action:'event_delete',target:e.id,title:e.title,removedAssignments:removed.length});
+ await store.save(db);return reply(res,200,{ok:true,removedAssignments:removed.length});
+}
 if(url.pathname==='/api/events/transmission'&&req.method==='POST'){
  if(!['master','general'].includes(user.role))return reply(res,403,{error:'Somente liderança geral ou master'});
  const e=db.events.find(x=>x.id===body.eventId);if(!e||user.role!=='master'&&!e.sectors.some(x=>user.sectors.includes(x)))return reply(res,404,{error:'Evento indisponível'});
