@@ -375,6 +375,13 @@ if(url.pathname==='/api/schedule/preview'&&req.method==='POST'){
  if(!eventIds.length)return reply(res,400,{error:'Selecione eventos autorizados'});
  const result=propose(db,eventIds),proposal={id:id(),createdBy:user.id,createdAt:new Date().toISOString(),status:'draft',...result};db.proposals.push(proposal);await store.save(db);return reply(res,201,{proposal});
 }
+if(url.pathname==='/api/schedule/eligible'&&req.method==='POST'){
+ if(!['master','general'].includes(user.role))return reply(res,403,{error:'Sem permissão'});
+ const e=db.events.find(x=>x.id===body.eventId),f=db.functions.find(x=>x.id===body.functionId);
+ if(!e||!f||user.role!=='master'&&!user.sectors.includes(f.sector))return reply(res,403,{error:'Não autorizado'});
+ const candidates=db.users.filter(u=>u.sectors?.includes(f.sector)&&db.skills.some(s=>s.userId===u.id&&s.functionId===f.id&&s.approved));
+ return reply(res,200,{users:candidates.map(u=>({id:u.id,name:u.name,unavailable:db.unavailability.some(a=>a.userId===u.id&&e.date>=a.from&&e.date<=a.to)}))});
+}
 if(url.pathname==='/api/schedule/resolve'&&req.method==='POST'){
  if(!['master','general'].includes(user.role))return reply(res,403,{error:'Sem permissão'});
  const p=db.proposals.find(x=>x.id===body.proposalId&&x.status==='draft'&&(user.role==='master'||x.createdBy===user.id||x.automaticCycle&&user.role==='general'));
