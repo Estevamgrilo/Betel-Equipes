@@ -26,7 +26,35 @@ const loginAttempts=new Map();
 const limited=(req,route)=>{const key=(req.socket.remoteAddress||'unknown')+':'+route;const now=Date.now();const item=loginAttempts.get(key);if(!item||item.until<now){loginAttempts.set(key,{count:1,until:now+15*60_000});return false}item.count++;return item.count>15};
 const SESSION_MS=12*60*60*1000;
 const pruneSessions=db=>{const now=Date.now();db.sessions=db.sessions.filter(s=>s.expires>now&&db.users.some(u=>u.id===s.userId));};
-async function notificationTick(){const prev=requestQueue;let release;requestQueue=new Promise(resolve=>release=resolve);await prev;try{const db=normalize(await store.load());const created=queueAssignmentNotifications(db);if(created)await store.save(db);const changed=await sendPendingNotifications(db);if(changed)await store.save(db)}catch(e){console.error('Falha no processamento de notificações:',e.message)}finally{release()}}
+// Prepara o ciclo seguinte no dia 45, sem publicar escalas.
+function prepareUpcomingCycleDrafts(db){
+ if(!db.cycleConfig||!db.cycles?.length)return false;
+ const today=new Date().toISOString().slice(0,10),due=dueCycles(db.cycleConfig.anchor,today,db.cycles);
+ let changed=false;
+ for(const window of due.filter(x=>x.index>0)){
+  const previous=db.cycles.find(x=>x.index===window.index-1);
+  if(!previous||!db.events.some(e=>e.cycleId===previous.id))continue;
+  const cycle={...window,id:id(),status:'pending_review',createdAt:new Date().toISOString(),createdBy:'system'};
+  db.cycles.push(cycle);changed=true;
+  const slots=(db.recurrenceSlots??defaultSlots).filter(x=>x.enabled),eventIds=[];
+  for(let t=dateUTC(cycle.start);t<=dateUTC(cycle.end);t+=86400000){
+   const day=new Date(t).getUTCDay(),date=new Date(t).toISOString().slice(0,10);
+   for(const slot of slots.filter(x=>x.day===day)){
+    const existing=db.events.find(e=>e.date===date&&e.time===slot.time);
+    if(existing){eventIds.push(existing.id);continue}
+    const e={id:id(),title:slot.title,date,time:slot.time,sectors:slot.sectors,transmission:'undefined',recurringKey:day+':'+slot.time,cycleId:cycle.id,createdBy:'system',createdAt:new Date().toISOString()};
+    db.events.push(e);eventIds.push(e.id);
+   }
+  }
+  if(eventIds.length){
+   const result=propose(db,[...new Set(eventIds)]);
+   db.proposals.push({id:id(),cycleId:cycle.id,createdBy:'system',createdAt:new Date().toISOString(),status:'draft',automaticCycle:true,...result});
+  }
+  db.audit.push({at:new Date().toISOString(),actor:'system',action:'cycle_auto_draft',target:cycle.id,start:cycle.start,end:cycle.end});
+ }
+ return changed;
+}
+async function notificationTick(){const prev=requestQueue;let release;requestQueue=new Promise(resolve=>release=resolve);await prev;try{const db=normalize(await store.load());const cycleChanged=prepareUpcomingCycleDrafts(db);const created=queueAssignmentNotifications(db);if(created||cycleChanged)await store.save(db);const changed=await sendPendingNotifications(db);if(changed)await store.save(db)}catch(e){console.error('Falha no processamento de notificações:',e.message)}finally{release()}}
 setTimeout(()=>notificationTick(),4000).unref();setInterval(()=>notificationTick(),5*60*1000).unref();
 const publicUser=u=>({id:u.id,name:u.name,email:u.email,role:u.role,sectors:u.sectors,profileComplete:!!u.profileComplete});
 const profileFields=['name','address','city','state','postalCode','phone','birthDate','education','course','profession','maritalStatus','hasChildren','children','favoriteFood','hobbies','interests'];
@@ -313,7 +341,7 @@ if(url.pathname==='/api/schedule/preview'&&req.method==='POST'){
  if(!eventIds.length)return reply(res,400,{error:'Selecione eventos autorizados'});
  const result=propose(db,eventIds),proposal={id:id(),createdBy:user.id,createdAt:new Date().toISOString(),status:'draft',...result};db.proposals.push(proposal);await store.save(db);return reply(res,201,{proposal});
 }
-if(url.pathname==='/api/schedule/proposals'&&req.method==='GET')return reply(res,200,{proposals:db.proposals.filter(p=>user.role==='master'||p.createdBy===user.id)});
+if(url.pathname==='/api/schedule/proposals'&&req.method==='GET')return reply(res,200,{proposals:db.proposals.filter(p=>user.role==='master'||p.createdBy===user.id||p.automaticCycle&&user.role==='general')});
 // V11: edição auditada de uma atribuição ainda em rascunho.
 if(url.pathname==='/api/schedule/edit'&&req.method==='POST'){
  if(!['master','general'].includes(user.role))return reply(res,403,{error:'Sem permissão'});
@@ -339,7 +367,7 @@ if(url.pathname==='/api/schedule/edit'&&req.method==='POST'){
 }
 if(url.pathname==='/api/schedule/approve'&&req.method==='POST'){
  if(!['master','general'].includes(user.role))return reply(res,403,{error:'Sem permissão'});
- const p=db.proposals.find(p=>p.id===body.proposalId&&p.status==='draft'&&(user.role==='master'||p.createdBy===user.id));if(!p)return reply(res,404,{error:'Proposta não encontrada'});
+ const p=db.proposals.find(p=>p.id===body.proposalId&&p.status==='draft'&&(user.role==='master'||p.createdBy===user.id||p.automaticCycle&&user.role==='general'));if(!p)return reply(res,404,{error:'Proposta não encontrada'});
  const applied=[],skipped=[];
  for(const a of p.proposed){const e=db.events.find(e=>e.id===a.eventId),f=db.functions.find(f=>f.sector===a.sector&&f.name===a.functionName),u=db.users.find(u=>u.id===a.userId);
   if(!e||!f||!u||a.sector==='transmissao'&&e.transmission!=='yes'||!db.skills.some(s=>s.userId===u.id&&s.functionId===f.id&&s.approved)||db.unavailability.some(x=>x.userId===u.id&&e.date>=x.from&&e.date<=x.to)||db.assignments.some(x=>x.eventId===e.id&&(x.sector===a.sector&&x.functionName===a.functionName||x.userId===u.id))){skipped.push(a);continue}
