@@ -279,9 +279,21 @@ if(url.pathname==='/api/skills'&&req.method==='POST'){
  if(old)old.approved=body.approved===true;else db.skills.push({userId:u.id,functionId:f.id,approved:body.approved===true});
  db.audit.push({at:new Date().toISOString(),actor:user.id,action:'skill_validation',target:u.id,functionId:f.id,approved:body.approved===true});await store.save(db);return reply(res,200,{ok:true});
 }
+if(url.pathname==='/api/unavailability'&&req.method==='GET'){
+ const items=db.unavailability.filter(x=>x.userId===user.id).sort((a,b)=>a.from.localeCompare(b.from));
+ return reply(res,200,{unavailability:items});
+}
+if(url.pathname==='/api/unavailability/remove'&&req.method==='POST'){
+ const index=db.unavailability.findIndex(x=>x.id===body.id&&x.userId===user.id);
+ if(index<0)return reply(res,404,{error:'Indisponibilidade não encontrada'});
+ const removed=db.unavailability.splice(index,1)[0];
+ db.audit.push({at:new Date().toISOString(),actor:user.id,action:'unavailability_remove',target:removed.id});
+ await store.save(db);return reply(res,200,{ok:true});
+}
 if(url.pathname==='/api/unavailability'&&req.method==='POST'){
  const from=String(body.from||''),to=String(body.to||'');
  if(!/^\d{4}-\d{2}-\d{2}$/.test(from)||!/^\d{4}-\d{2}-\d{2}$/.test(to)||from>to||!Number.isFinite(Date.parse(from))||!Number.isFinite(Date.parse(to)))return reply(res,400,{error:'Datas inválidas'});
+ if(db.unavailability.some(x=>x.userId===user.id&&x.from===from&&x.to===to))return reply(res,409,{error:'Esta indisponibilidade já está cadastrada'});
  db.unavailability.push({id:id(),userId:user.id,from,to});db.audit.push({at:new Date().toISOString(),actor:user.id,action:'unavailability_create'});await store.save(db);return reply(res,201,{ok:true});
 }
 if(url.pathname==='/api/schedule/preview'&&req.method==='POST'){
