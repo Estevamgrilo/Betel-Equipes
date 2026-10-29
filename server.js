@@ -302,6 +302,12 @@ if(url.pathname==='/api/recurrence/generate'&&req.method==='POST'){
  return reply(res,200,{created:created.length,skipped,notice:'Eventos criados sem escala nem autorização de transmissão'});
 }
 // V9: funções, habilitações, indisponibilidades e proposta sujeita à aprovação.
+if(url.pathname==='/api/birthdays/month'&&req.method==='GET'){
+ if(!['master','general','sector'].includes(user.role))return reply(res,403,{error:'Sem permissão'});
+ const month=Number(new Intl.DateTimeFormat('en-US',{timeZone:'America/Sao_Paulo',month:'numeric'}).format(new Date()));
+ const people=db.users.filter(u=>(user.role==='master'||u.sectors.some(s=>user.sectors.includes(s)))&&u.profile?.birthDate?.slice(5,7)===String(month).padStart(2,'0')).map(u=>({id:u.id,name:u.name,day:Number(u.profile.birthDate.slice(8,10))})).sort((a,b)=>a.day-b.day||a.name.localeCompare(b.name));
+ return reply(res,200,{month,people});
+}
 if(url.pathname==='/api/functions'&&req.method==='GET')return reply(res,200,{functions:db.functions});
 if(url.pathname==='/api/functions'&&req.method==='POST'){
  if(!['master','general'].includes(user.role))return reply(res,403,{error:'Sem permissão'});
