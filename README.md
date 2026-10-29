@@ -1,3 +1,33 @@
+# Betel Equipes — Sistema de Gestão de Voluntários
+
+## Estado atual do projeto
+O Betel Equipes é um **sistema funcional em implantação e validação interna**, não um protótipo. A interface deve usar dados persistidos pelo servidor, não nomes, escalas ou cursos fictícios. Não exibir números de versões, etiquetas de demonstração ou links para protótipos nas telas dos usuários.
+
+## Ambientes e liberação
+O ambiente atual do Render é de **homologação interna** (nome técnico `betel-equipes-staging`). A existência de um ambiente de homologação não significa que a aplicação seja um protótipo: nele validamos as funcionalidades reais antes de convidar os voluntários.
+
+## Critérios para considerar um módulo concluído
+- Persistência no PostgreSQL e consistência após reinicialização.
+- Autenticação, autorização por perfil e proteção dos dados pessoais.
+- Fluxos completos de criação, edição, consulta e exclusão quando autorizados.
+- Histórico auditável das alterações administrativas.
+- Testes automatizados e testes reais de ponta a ponta.
+- Tratamento de erros e ausência de dados de demonstração na interface.
+- Verificação de segurança, privacidade, recuperação de acesso e backups antes da liberação geral.
+
+## Funcionalidades ainda a validar ou implementar
+- Recuperação de senha por e-mail, incluindo envio real, expiração e uso único do link.
+- Gestão real de cursos e acompanhamento de aprendizado, atualmente não concluída.
+- Integração consistente de todos os recursos operacionais na plataforma principal.
+- Auditoria de segurança, proteção de dados pessoais, política de retenção e backup/restauração testados.
+
+## Operação
+Execute `npm install`, `npm test` e `npm start` com Node.js 20+. Configure `DATABASE_URL` e `BETEL_SETUP_KEY` no ambiente de hospedagem. Nunca armazene credenciais no repositório.
+
+---
+
+## Histórico técnico e documentação legada
+
 # Betel Equipes V7 — teste local
 
 ## Iniciar
