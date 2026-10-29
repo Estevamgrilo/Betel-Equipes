@@ -38,7 +38,7 @@ export async function sendPendingNotifications(db){
    }else{
     const key=process.env.WHATSAPP_ACCESS_TOKEN,phoneId=process.env.WHATSAPP_PHONE_NUMBER_ID,template=process.env.WHATSAPP_TEMPLATE_NAME,phone=cleanPhone(u.profile?.phone);
     configured=!!(key&&phoneId&&template&&phone);
-    if(configured){const r=await fetch('https://graph.facebook.com/v22.0/'+encodeURIComponent(phoneId)+'/messages',{method:'POST',headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},body:JSON.stringify({messaging_product:'whatsapp',to:phone,type:'template',template:{name:template,language:{code:process.env.WHATSAPP_TEMPLATE_LANGUAGE||'pt_BR'},components:[{type:'body',parameters:[{type:'text',text:u.name.slice(0,80)},{type:'text',text:n.title},{type:'text',text:n.message.slice(0,500)}]}]}})},signal:AbortSignal.timeout(12000));ok=r.ok;if(!ok)console.error('Notificação WhatsApp HTTP',r.status)}
+    if(configured){const r=await fetch('https://graph.facebook.com/v22.0/'+encodeURIComponent(phoneId)+'/messages',{method:'POST',headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},body:JSON.stringify({messaging_product:'whatsapp',to:phone,type:'template',template:{name:template,language:{code:process.env.WHATSAPP_TEMPLATE_LANGUAGE||'pt_BR'},components:[{type:'body',parameters:[{type:'text',text:u.name.slice(0,80)},{type:'text',text:n.title},{type:'text',text:n.message.slice(0,500)}]}]}}),signal:AbortSignal.timeout(12000));ok=r.ok;if(!ok)console.error('Notificação WhatsApp HTTP',r.status)}
    }
   }catch(e){console.error('Falha em notificação',job.channel,e.message)}
   if(!configured){job.status='unconfigured';changed=true;continue}
