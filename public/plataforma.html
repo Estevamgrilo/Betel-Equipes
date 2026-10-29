@@ -21,15 +21,15 @@ async function showSchedule(){try{
   const team=assignments.filter(a=>a.eventId===e.id),mine=team.filter(a=>a.userId===me.id);
   const ownSectors=new Set([...(me.sectors||[]),...mine.map(a=>a.sector)]);
   const sectorIds=[...new Set([...allSectors.map(s=>s.id),...(e.sectors||[]),...team.map(a=>a.sector)])];
-  sectorIds.sort((a,b)=>Number(ownSectors.has(b))-Number(ownSectors.has(a))||String(sectorNames[a]||a).localeCompare(String(sectorNames[b]||b),'pt-BR'));
+  sectorIds.sort((a,b)=>Number(team.some(x=>x.sector===b&&x.userId===me.id))-Number(team.some(x=>x.sector===a&&x.userId===me.id))||String(sectorNames[a]||a).localeCompare(String(sectorNames[b]||b),'pt-BR'));
   const cols=sectorIds.map(s=>{
    const people=team.filter(a=>a.sector===s),functions=[...new Set([...allFunctions.filter(f=>f.sector===s).map(f=>f.name),...people.map(a=>a.functionName)])];
-   const isMine=ownSectors.has(s),enabled=(e.sectors||[]).includes(s);
+   const isMine=ownSectors.has(s),isAssigned=people.some(a=>a.userId===me.id),enabled=(e.sectors||[]).includes(s);
    const rows=functions.length?functions.map(fn=>{
     const assigned=people.filter(a=>a.functionName===fn);
     return '<div style="padding:10px 0;border-top:1px solid #e7edf5"><div style="font-size:12px;font-weight:700;color:#72839c;margin-bottom:5px">'+esc(fn)+'</div>'+(assigned.length?assigned.map(a=>'<div style="font-weight:'+(a.userId===me.id?'700':'500')+'">'+esc(a.volunteerName||'Voluntário não escalado')+(a.userId===me.id?' <span style="font-size:12px;color:#3268e9">(você)</span>':'')+'</div>').join(''):'<span class="muted">Ninguém escalado ainda</span>')+'</div>'
    }).join(''):people.length?people.map(a=>'<div>'+esc(a.volunteerName||'Voluntário não escalado')+' · '+esc(a.functionName||'Função não definida')+'</div>').join(''):'<p class="muted">Ninguém escalado ainda</p>';
-   return '<div style="border:1px solid '+(isMine?'#b8cef8':'#e0e8f3')+';border-radius:14px;padding:16px;background:'+(isMine?'#eef5ff':'#fff')+';min-width:0"><h3 style="margin:0 0 12px">'+esc(sectorNames[s]||s)+(isMine?' <span style="font-size:12px;color:#3268e9">· Minha equipe</span>':'')+'</h3>'+(enabled?'':'<p class="muted" style="font-size:12px">Equipe não incluída neste evento</p>')+rows+'</div>';
+   return '<div style="border:1px solid '+(isAssigned?'#ef9a9a':'#e0e8f3')+';border-radius:14px;padding:16px;background:'+(isAssigned?'#fff0f0':'#fff')+';min-width:0"><h3 style="margin:0 0 12px">'+esc(sectorNames[s]||s)+(isAssigned?' <span style="font-size:12px;color:#c62828">· Você está escalado</span>':'')+'</h3>'+(enabled?'':'<p class="muted" style="font-size:12px">Equipe não incluída neste evento</p>')+rows+'</div>';
   }).join('');
   const mineHTML=mine.length?'<div style="padding:12px;background:#eef5ff;border-radius:12px;margin:12px 0"><b>Minhas funções nesta escala</b>'+mine.map(a=>'<p style="margin:7px 0"><strong>'+esc(a.functionName)+'</strong> · '+esc(sectorNames[a.sector]||a.sector)+'</p>').join('')+'</div>':'<p class="muted">Você não está escalado neste evento.</p>';
   return '<section class="card"><h2>'+esc(e.title||'Evento')+'</h2><p class="muted">'+esc(formatDate(e.date))+' às '+esc(e.time||'Horário não definido')+'</p>'+mineHTML+'<h3>Equipe completa do evento</h3><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">'+cols+'</div></section>';
