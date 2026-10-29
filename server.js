@@ -54,7 +54,7 @@ if(url.pathname==='/api/reset-password'&&req.method==='POST'){
  if(!record)return reply(res,400,{error:'Link inválido ou expirado. Solicite uma nova recuperação.'});
  const target=db.users.find(u=>u.id===record.userId);
  if(!target)return reply(res,400,{error:'Link inválido ou expirado'});
- target.passwordHash=hash(password);db.sessions=db.sessions.filter(s=>s.userId!==target.id);db.passwordResets=db.passwordResets.filter(x=>x.userId!==target.id);db.audit.push({at:new Date().toISOString(),actor:target.id,action:'password_reset',target:target.id});await store.save(db);
+ target.password=hash(password);db.sessions=db.sessions.filter(s=>s.userId!==target.id);db.passwordResets=db.passwordResets.filter(x=>x.userId!==target.id);db.audit.push({at:new Date().toISOString(),actor:target.id,action:'password_reset',target:target.id});await store.save(db);
  return reply(res,200,{ok:true,message:'Senha redefinida. Faça login com sua nova senha.'});
 }
 if(url.pathname==='/api/setup'&&req.method==='POST'){
