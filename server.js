@@ -5,11 +5,12 @@ import crypto from 'node:crypto';
 import {createStore} from './db/store.js';
 import {propose} from './scheduler.js';
 import {cycleWindow,dueCycles,dateUTC} from './cycles.js';
+import {ensureNotifications,queueAssignmentNotifications,sendPendingNotifications} from './notifications.js';
 const PORT=Number(process.env.PORT||3000), ROOT=process.cwd(), DB=path.join(ROOT,'data','database.json');
 fs.mkdirSync(path.dirname(DB),{recursive:true});
 const load=()=>fs.existsSync(DB)?JSON.parse(fs.readFileSync(DB,'utf8')):{users:[],invites:[],sessions:[],audit:[],sectors:[{id:'som',name:'Sonoplastia'},{id:'projecao',name:'Projeção'},{id:'iluminacao',name:'Iluminação'},{id:'transmissao',name:'Transmissão'},{id:'midia',name:'Mídia'}]};
 const defaultSlots=[{day:5,time:'19:00',title:'Culto de sexta-feira',enabled:true,sectors:['som','projecao','iluminacao','midia']},{day:6,time:'19:00',title:'Culto de sábado',enabled:true,sectors:['som','projecao','iluminacao','midia']},...['09:00','10:15','19:00'].map(time=>({day:0,time,title:'Culto de domingo',enabled:true,sectors:['som','projecao','iluminacao','midia']}))];
-const normalize=db=>{db.sectors??=[{id:'som',name:'Sonoplastia'},{id:'projecao',name:'Projeção'},{id:'iluminacao',name:'Iluminação'},{id:'transmissao',name:'Transmissão'},{id:'midia',name:'Mídia'}];db.events??=[];db.assignments??=[];db.functions??=[];db.skills??=[];db.unavailability??=[];db.proposals??=[];db.cycles??=[];db.cycleConfig??=null;db.courses??=[];db.courseProgress??={};db.passwordResets??=[];return db};
+const normalize=db=>{db.sectors??=[{id:'som',name:'Sonoplastia'},{id:'projecao',name:'Projeção'},{id:'iluminacao',name:'Iluminação'},{id:'transmissao',name:'Transmissão'},{id:'midia',name:'Mídia'}];db.events??=[];db.assignments??=[];db.functions??=[];db.skills??=[];db.unavailability??=[];db.proposals??=[];db.cycles??=[];db.cycleConfig??=null;db.courses??=[];db.courseProgress??={};db.passwordResets??=[];ensureNotifications(db);return db};
 const save=db=>{const temp=DB+'.tmp';fs.writeFileSync(temp,JSON.stringify(db,null,2),{mode:0o600});fs.renameSync(temp,DB)};
 const store=await createStore({databaseUrl:process.env.DATABASE_URL,localLoad:load,localSave:save});
 let requestQueue=Promise.resolve();
@@ -25,6 +26,8 @@ const loginAttempts=new Map();
 const limited=(req,route)=>{const key=(req.socket.remoteAddress||'unknown')+':'+route;const now=Date.now();const item=loginAttempts.get(key);if(!item||item.until<now){loginAttempts.set(key,{count:1,until:now+15*60_000});return false}item.count++;return item.count>15};
 const SESSION_MS=12*60*60*1000;
 const pruneSessions=db=>{const now=Date.now();db.sessions=db.sessions.filter(s=>s.expires>now&&db.users.some(u=>u.id===s.userId));};
+async function notificationTick(){const prev=requestQueue;let release;requestQueue=new Promise(resolve=>release=resolve);await prev;try{const db=normalize(await store.load());const created=queueAssignmentNotifications(db);if(created)await store.save(db);const changed=await sendPendingNotifications(db);if(changed)await store.save(db)}catch(e){console.error('Falha no processamento de notificações:',e.message)}finally{release()}}
+setTimeout(()=>notificationTick(),4000).unref();setInterval(()=>notificationTick(),5*60*1000).unref();
 const publicUser=u=>({id:u.id,name:u.name,email:u.email,role:u.role,sectors:u.sectors,profileComplete:!!u.profileComplete});
 const profileFields=['name','address','city','state','postalCode','phone','birthDate','education','course','profession','maritalStatus','hasChildren','children','favoriteFood','hobbies','interests'];
 const cleanProfile=(p,base={})=>{const out={...base};for(const k of profileFields){if(!(k in p))continue;const v=p[k];if(k==='children'){if(!Array.isArray(v)||v.length>20)throw Error('Informe até 20 filhos');out.children=v.map(x=>({name:String(x.name||'').trim().slice(0,100),birthDate:String(x.birthDate||'').slice(0,10)}));if(out.children.some(x=>x.birthDate&&!/^\d{4}-\d{2}-\d{2}$/.test(x.birthDate)))throw Error('Data de nascimento inválida')}else if(k==='interests'){out.interests=Array.isArray(v)?v.slice(0,30).map(x=>String(x).slice(0,80)):[]}else if(k==='hasChildren'){out.hasChildren=v===true}else{out[k]=String(v??'').trim().slice(0,k==='address'?250:150)}}return out};
@@ -71,7 +74,7 @@ if(url.pathname==='/api/admin/reset-test-data'&&req.method==='POST'){
  const retained=db.users.find(u=>u.id===user.id&&u.email==='estevamgrilo@hotmail.com'&&u.role==='master');
  if(!retained)return reply(res,409,{error:'Master não encontrado; nenhuma alteração realizada'});
  const fresh=normalize({users:[retained],invites:[],sessions:[],audit:[],sectors:[{id:'som',name:'Sonoplastia'},{id:'projecao',name:'Projeção'},{id:'iluminacao',name:'Iluminação'},{id:'transmissao',name:'Transmissão'},{id:'midia',name:'Mídia'}]});
- fresh.events=[];fresh.assignments=[];fresh.functions=[];fresh.skills=[];fresh.unavailability=[];fresh.proposals=[];fresh.cycles=[];fresh.cycleConfig=null;fresh.courses=[];fresh.courseProgress={};
+ fresh.events=[];fresh.assignments=[];fresh.functions=[];fresh.skills=[];fresh.unavailability=[];fresh.proposals=[];fresh.cycles=[];fresh.cycleConfig=null;fresh.courses=[];fresh.courseProgress={};fresh.notifications=[];fresh.notificationDeliveries=[];
  await store.save(fresh);return reply(res,200,{ok:true,message:'Dados de teste zerados. Apenas o Master foi preservado. Faça login novamente.',preservedEmail:retained.email});
 }
 if(url.pathname==='/api/logout'&&req.method==='POST'){
@@ -83,6 +86,21 @@ if(url.pathname==='/api/logout'&&req.method==='POST'){
  return reply(res,200,{ok:true});
 }
 if(url.pathname==='/api/me')return reply(res,200,{user:publicUser(user)});
+if(url.pathname==='/api/notifications'&&req.method==='GET'){
+ const list=db.notifications.filter(n=>n.userId===user.id&&!n.cancelled&&db.assignments.some(a=>a.id===n.assignmentId&&a.userId===user.id)).slice(-80).reverse();
+ return reply(res,200,{notifications:list,unread:list.filter(n=>!n.readAt).length});
+}
+if(url.pathname==='/api/notifications/read'&&req.method==='POST'){
+ const n=db.notifications.find(n=>n.id===body.id&&n.userId===user.id);
+ if(!n)return reply(res,404,{error:'Notificação não encontrada'});
+ n.readAt??=new Date().toISOString();await store.save(db);return reply(res,200,{ok:true});
+}
+if(url.pathname==='/api/admin/notification-status'&&req.method==='GET'){
+ if(user.role!=='master')return reply(res,403,{error:'Somente Master'});
+ const counts={};for(const j of db.notificationDeliveries)counts[j.channel+':'+j.status]=(counts[j.channel+':'+j.status]||0)+1;
+ return reply(res,200,{channels:{email:!!(process.env.RESEND_API_KEY&&process.env.BETEL_MAIL_FROM),whatsapp:!!(process.env.WHATSAPP_ACCESS_TOKEN&&process.env.WHATSAPP_PHONE_NUMBER_ID&&process.env.WHATSAPP_TEMPLATE_NAME)},counts});
+}
+
 if(url.pathname==='/api/profile'&&req.method==='GET')return reply(res,200,{user:publicUser(user),profile:user.profile||{}});
 if(url.pathname==='/api/profile'&&req.method==='POST'){
  const p=cleanProfile(body,user.profile||{});
@@ -302,9 +320,9 @@ if(url.pathname==='/api/schedule/approve'&&req.method==='POST'){
  const applied=[],skipped=[];
  for(const a of p.proposed){const e=db.events.find(e=>e.id===a.eventId),f=db.functions.find(f=>f.sector===a.sector&&f.name===a.functionName),u=db.users.find(u=>u.id===a.userId);
   if(!e||!f||!u||a.sector==='transmissao'&&e.transmission!=='yes'||!db.skills.some(s=>s.userId===u.id&&s.functionId===f.id&&s.approved)||db.unavailability.some(x=>x.userId===u.id&&e.date>=x.from&&e.date<=x.to)||db.assignments.some(x=>x.eventId===e.id&&(x.sector===a.sector&&x.functionName===a.functionName||x.userId===u.id))){skipped.push(a);continue}
-  const record={...a,id:id(),proposal:false,createdAt:new Date().toISOString()};db.assignments.push(record);applied.push(record);
+  const record={...a,id:id(),proposal:false,notificationEligible:true,createdAt:new Date().toISOString()};db.assignments.push(record);applied.push(record);
  }
- p.status='reviewed';p.reviewedBy=user.id;p.reviewedAt=new Date().toISOString();db.audit.push({at:p.reviewedAt,actor:user.id,action:'schedule_approval',target:p.id,applied:applied.length,skipped:skipped.length});await store.save(db);return reply(res,200,{applied,skipped});
+ queueAssignmentNotifications(db);p.status='reviewed';p.reviewedBy=user.id;p.reviewedAt=new Date().toISOString();db.audit.push({at:p.reviewedAt,actor:user.id,action:'schedule_approval',target:p.id,applied:applied.length,skipped:skipped.length});await store.save(db);return reply(res,200,{applied,skipped});
 }
 // V8: agenda e escalas manuais, sem ativação automática por padrão.
 if(url.pathname==='/api/events'&&req.method==='GET'){
@@ -336,7 +354,8 @@ if(url.pathname==='/api/assignments'&&req.method==='POST'){
  const functionName=String(body.functionName||'').trim().slice(0,80);if(!functionName)return reply(res,400,{error:'Informe a função'});
  const current=db.assignments.find(x=>x.eventId===e.id&&x.sector===sector&&x.functionName===functionName);
  const old=current?{userId:current.userId}:null;
- if(current){current.userId=u.id;current.updatedAt=new Date().toISOString()}else db.assignments.push({id:id(),eventId:e.id,sector,functionName,userId:u.id,createdAt:new Date().toISOString()});
+ if(current){if(current.userId!==u.id){current.notificationEligible=true;current.id=id()}current.userId=u.id;current.updatedAt=new Date().toISOString()}else db.assignments.push({id:id(),eventId:e.id,sector,functionName,userId:u.id,notificationEligible:true,createdAt:new Date().toISOString()});
+ queueAssignmentNotifications(db);
  db.audit.push({at:new Date().toISOString(),actor:user.id,action:'assignment_upsert',target:e.id,sector,functionName,old,new:{userId:u.id}});await store.save(db);return reply(res,200,{ok:true});
 }
 if(url.pathname==='/api/assignments/remove'&&req.method==='POST'){
