@@ -328,7 +328,9 @@ if(url.pathname==='/api/schedule/approve'&&req.method==='POST'){
 if(url.pathname==='/api/events'&&req.method==='GET'){
  const visible=db.events.filter(e=>user.role==='master'||e.sectors.some(x=>user.sectors.includes(x)));
  const assignments=db.assignments.filter(a=>visible.some(e=>e.id===a.eventId));
- return reply(res,200,{events:visible,assignments});
+ const names=new Map(db.users.map(u=>[u.id,u.name]));
+ const detailed=assignments.map(a=>({...a,volunteerName:names.get(a.userId)||'Voluntário não escalado'}));
+ return reply(res,200,{events:visible,assignments:detailed});
 }
 if(url.pathname==='/api/events'&&req.method==='POST'){
  if(!['master','general'].includes(user.role))return reply(res,403,{error:'Sem permissão para criar eventos'});
