@@ -9,7 +9,7 @@ const PORT=Number(process.env.PORT||3000), ROOT=process.cwd(), DB=path.join(ROOT
 fs.mkdirSync(path.dirname(DB),{recursive:true});
 const load=()=>fs.existsSync(DB)?JSON.parse(fs.readFileSync(DB,'utf8')):{users:[],invites:[],sessions:[],audit:[],sectors:[{id:'som',name:'Sonoplastia'},{id:'projecao',name:'Projeção'},{id:'iluminacao',name:'Iluminação'},{id:'transmissao',name:'Transmissão'},{id:'midia',name:'Mídia'}]};
 const defaultSlots=[{day:5,time:'19:00',title:'Culto de sexta-feira',enabled:true,sectors:['som','projecao','iluminacao','midia']},{day:6,time:'19:00',title:'Culto de sábado',enabled:true,sectors:['som','projecao','iluminacao','midia']},...['09:00','10:15','19:00'].map(time=>({day:0,time,title:'Culto de domingo',enabled:true,sectors:['som','projecao','iluminacao','midia']}))];
-const normalize=db=>{db.sectors??=[{id:'som',name:'Sonoplastia'},{id:'projecao',name:'Projeção'},{id:'iluminacao',name:'Iluminação'},{id:'transmissao',name:'Transmissão'},{id:'midia',name:'Mídia'}];db.events??=[];db.assignments??=[];db.functions??=[];db.skills??=[];db.unavailability??=[];db.proposals??=[];db.cycles??=[];db.cycleConfig??=null;db.courses??=[];return db};
+const normalize=db=>{db.sectors??=[{id:'som',name:'Sonoplastia'},{id:'projecao',name:'Projeção'},{id:'iluminacao',name:'Iluminação'},{id:'transmissao',name:'Transmissão'},{id:'midia',name:'Mídia'}];db.events??=[];db.assignments??=[];db.functions??=[];db.skills??=[];db.unavailability??=[];db.proposals??=[];db.cycles??=[];db.cycleConfig??=null;db.courses??=[];db.courseProgress??={};return db};
 const save=db=>{const temp=DB+'.tmp';fs.writeFileSync(temp,JSON.stringify(db,null,2),{mode:0o600});fs.renameSync(temp,DB)};
 const store=await createStore({databaseUrl:process.env.DATABASE_URL,localLoad:load,localSave:save});
 let requestQueue=Promise.resolve();
@@ -45,7 +45,7 @@ if(url.pathname==='/api/admin/reset-test-data'&&req.method==='POST'){
  const retained=db.users.find(u=>u.id===user.id&&u.email==='estevamgrilo@hotmail.com'&&u.role==='master');
  if(!retained)return reply(res,409,{error:'Master não encontrado; nenhuma alteração realizada'});
  const fresh=normalize({users:[retained],invites:[],sessions:[],audit:[],sectors:[{id:'som',name:'Sonoplastia'},{id:'projecao',name:'Projeção'},{id:'iluminacao',name:'Iluminação'},{id:'transmissao',name:'Transmissão'},{id:'midia',name:'Mídia'}]});
- fresh.events=[];fresh.assignments=[];fresh.functions=[];fresh.skills=[];fresh.unavailability=[];fresh.proposals=[];fresh.cycles=[];fresh.cycleConfig=null;
+ fresh.events=[];fresh.assignments=[];fresh.functions=[];fresh.skills=[];fresh.unavailability=[];fresh.proposals=[];fresh.cycles=[];fresh.cycleConfig=null;fresh.courses=[];fresh.courseProgress={};
  await store.save(fresh);return reply(res,200,{ok:true,message:'Dados de teste zerados. Apenas o Master foi preservado. Faça login novamente.',preservedEmail:retained.email});
 }
 if(url.pathname==='/api/logout'&&req.method==='POST'){
@@ -84,6 +84,33 @@ if(url.pathname==='/api/admin/user-history'&&req.method==='GET'){
  if(user.role!=='master')return reply(res,403,{error:'Somente Master'});
  const target=url.searchParams.get('userId');return reply(res,200,{audit:db.audit.filter(a=>a.target===target||a.actor===target).slice(-100).reverse()});
 }
+if(url.pathname==='/api/courses/progress'&&req.method==='GET'){
+ const result={};for(const course of db.courses){if(user.role!=='master'&&!course.sectors.some(s=>(user.sectors||[]).includes(s)))continue;
+ const rows=course.lessons.map(l=>{const p=db.courseProgress[user.id+'|'+course.id+'|'+l.id];return {lessonId:l.id,percent:p?.percent||0,completed:!!p?.completed,duration:p?.duration||0}});
+ result[course.id]={lessons:rows,percent:rows.length?Math.round(rows.filter(r=>r.completed).length/rows.length*100):0};}
+ return reply(res,200,{progress:result});
+}
+if(url.pathname==='/api/courses/progress'&&req.method==='POST'){
+ const course=db.courses.find(c=>c.id===body.courseId);
+ if(!course||user.role!=='master'&&!course.sectors.some(s=>(user.sectors||[]).includes(s)))return reply(res,403,{error:'Curso não liberado'});
+ const index=course.lessons.findIndex(l=>l.id===body.lessonId);
+ if(index<0)return reply(res,404,{error:'Aula não encontrada'});
+ if(index>0&&!db.courseProgress[user.id+'|'+course.id+'|'+course.lessons[index-1].id]?.completed)return reply(res,403,{error:'Conclua a aula anterior primeiro'});
+ const duration=Number(body.duration),start=Number(body.start),end=Number(body.end);
+ if(!Number.isFinite(duration)||duration<1||duration>86400||!Number.isFinite(start)||!Number.isFinite(end)||start<0||end>duration+1||end<=start||end-start>12)return reply(res,400,{error:'Trecho de reprodução inválido'});
+ const key=user.id+'|'+course.id+'|'+body.lessonId;
+ const p=db.courseProgress[key]||{duration,segments:[],percent:0,completed:false,lastAt:0};
+ if(p.completed)return reply(res,200,{percent:100,completed:true});
+ if(p.duration&&Math.abs(p.duration-duration)>2)return reply(res,409,{error:'Duração do vídeo alterada; atualize a página'});
+ const now=Date.now(),elapsed=p.lastAt?(now-p.lastAt)/1000:12;
+ if(elapsed<0.8||end-start>Math.min(12,elapsed+2))return reply(res,429,{error:'Aguarde a reprodução real'});
+ p.lastAt=now;p.duration=duration;p.segments.push([start,Math.min(end,duration)]);
+ p.segments.sort((a,b)=>a[0]-b[0]);const merged=[];for(const segment of p.segments){const last=merged[merged.length-1];if(last&&segment[0]<=last[1]+0.2)last[1]=Math.max(last[1],segment[1]);else merged.push(segment.slice())}
+ p.segments=merged;const watched=merged.reduce((n,s)=>n+s[1]-s[0],0);
+ p.percent=Math.min(100,Math.floor(watched/duration*100));p.completed=watched>=duration*0.95;
+ if(p.completed)p.percent=100;db.courseProgress[key]=p;await store.save(db);
+ return reply(res,200,{percent:p.percent,completed:p.completed});
+}
 if(url.pathname==='/api/courses'&&req.method==='GET'){
  const allowed=db.courses.filter(c=>user.role==='master'||Array.isArray(c.sectors)&&c.sectors.some(s=>(user.sectors||[]).includes(s)));
  return reply(res,200,{courses:allowed.map(c=>({...c,lessons:(c.lessons||[]).map(l=>({...l}))})),sectors:db.sectors});
@@ -101,14 +128,14 @@ if(url.pathname==='/api/courses'&&req.method==='POST'){
  const existing=body.id?db.courses.find(x=>x.id===body.id):null;
  if(body.id&&!existing)return reply(res,404,{error:'Curso não encontrado'});
  const course={id:existing?.id||id(),title,description,sectors,thumbnail:raw||'',lessons:clean,updatedAt:new Date().toISOString(),createdAt:existing?.createdAt||new Date().toISOString()};
- if(existing)Object.assign(existing,course);else db.courses.push(course);
+ if(existing){for(const key of Object.keys(db.courseProgress))if(key.includes('|'+course.id+'|')&&!clean.some(l=>key.endsWith('|'+l.id)))delete db.courseProgress[key];Object.assign(existing,course)}else db.courses.push(course);
  db.audit.push({at:new Date().toISOString(),actor:user.id,action:existing?'course_update':'course_create',target:course.id,courseTitle:title});
  await store.save(db);return reply(res,200,{ok:true,course});
 }
 if(url.pathname==='/api/courses/delete'&&req.method==='POST'){
  if(user.role!=='master')return reply(res,403,{error:'Somente Master'});
  const course=db.courses.find(x=>x.id===body.id);if(!course)return reply(res,404,{error:'Curso não encontrado'});
- db.courses=db.courses.filter(x=>x.id!==course.id);db.audit.push({at:new Date().toISOString(),actor:user.id,action:'course_delete',target:course.id,courseTitle:course.title});await store.save(db);return reply(res,200,{ok:true});
+ db.courses=db.courses.filter(x=>x.id!==course.id);for(const key of Object.keys(db.courseProgress))if(key.includes('|'+course.id+'|'))delete db.courseProgress[key];db.audit.push({at:new Date().toISOString(),actor:user.id,action:'course_delete',target:course.id,courseTitle:course.title});await store.save(db);return reply(res,200,{ok:true});
 }
 if(url.pathname==='/api/sectors'&&req.method==='GET')return reply(res,200,{sectors:db.sectors});
 if(url.pathname==='/api/sectors'&&req.method==='POST'){
@@ -283,4 +310,4 @@ if(user.role!=='master')return reply(res,403,{error:'Somente master'});return re
 if(url.pathname==='/api/invites'&&req.method==='POST'){if(!['master','general'].includes(user.role))return reply(res,403,{error:'Sem permissão'});const sectors=Array.isArray(body.sectors)?body.sectors.filter(x=>db.sectors.some(s=>s.id===x)&& (user.role==='master'||user.sectors.includes(x))).slice(0,20):[];const code=crypto.randomBytes(5).toString('hex').toUpperCase();db.invites.push({code,sectors,used:false,expires:Date.now()+7*86400000,createdBy:user.id});db.audit.push({at:new Date().toISOString(),action:'invite',actor:user.id});await store.save(db);return reply(res,201,{code,expiresInDays:7})}
 if(url.pathname==='/api/users'&&req.method==='GET'){if(!['master','general','sector'].includes(user.role))return reply(res,403,{error:'Sem permissão'});return reply(res,200,{users:db.users.filter(u=>user.role==='master'||u.sectors.some(s=>user.sectors.includes(s))).map(publicUser)})}
 return reply(res,404,{error:'Rota não encontrada'})}catch(e){console.error('API error:',e.message);return reply(res,400,{error:'Requisição inválida'})}}finally{release()}}
-const file=url.pathname==='/'?'index.html':url.pathname.slice(1);const full=path.resolve(ROOT,'public',file);if(!full.startsWith(path.resolve(ROOT,'public')+path.sep))return res.writeHead(403).end();fs.readFile(full,(err,data)=>{if(err)return res.writeHead(404).end('Não encontrado');res.writeHead(200,{'Referrer-Policy':'no-referrer','X-Frame-Options':'DENY','Content-Security-Policy':"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://i.ytimg.com; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",'Content-Type':full.endsWith('.html')?'text/html; charset=utf-8':full.endsWith('.js')?'application/javascript; charset=utf-8':full.endsWith('.css')?'text/css; charset=utf-8':full.endsWith('.png')?'image/png':'text/plain; charset=utf-8','X-Content-Type-Options':'nosniff','Permissions-Policy':'camera=(), microphone=(), geolocation=()','Cross-Origin-Resource-Policy':'same-origin'});res.end(data)})}).listen(PORT,()=>console.log(`Betel Equipes: http://localhost:${PORT}`));
+const file=url.pathname==='/'?'index.html':url.pathname.slice(1);const full=path.resolve(ROOT,'public',file);if(!full.startsWith(path.resolve(ROOT,'public')+path.sep))return res.writeHead(403).end();fs.readFile(full,(err,data)=>{if(err)return res.writeHead(404).end('Não encontrado');res.writeHead(200,{'Referrer-Policy':'no-referrer','X-Frame-Options':'DENY','Content-Security-Policy':"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://i.ytimg.com; connect-src 'self' https://www.youtube.com https://www.youtube-nocookie.com; frame-src https://www.youtube.com https://www.youtube-nocookie.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",'Content-Type':full.endsWith('.html')?'text/html; charset=utf-8':full.endsWith('.js')?'application/javascript; charset=utf-8':full.endsWith('.css')?'text/css; charset=utf-8':full.endsWith('.png')?'image/png':'text/plain; charset=utf-8','X-Content-Type-Options':'nosniff','Permissions-Policy':'camera=(), microphone=(), geolocation=()','Cross-Origin-Resource-Policy':'same-origin'});res.end(data)})}).listen(PORT,()=>console.log(`Betel Equipes: http://localhost:${PORT}`));
