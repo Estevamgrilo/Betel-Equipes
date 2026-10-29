@@ -325,6 +325,15 @@ if(url.pathname==='/api/functions'&&req.method==='POST'){
  if(user.role!=='master'&&!user.sectors.includes(sector))return reply(res,403,{error:'Equipe não autorizada'});
  const f={id:id(),sector,name,automatic:body.automatic===true};db.functions.push(f);db.audit.push({at:new Date().toISOString(),actor:user.id,action:'function_create',target:f.id});await store.save(db);return reply(res,201,{function:f});
 }
+if(url.pathname==='/api/volunteer/sectors'&&req.method==='POST'){
+ if(!['master','general'].includes(user.role))return reply(res,403,{error:'Sem permissão'});
+ const u=db.users.find(x=>x.id===body.userId),sector=String(body.sector||'');
+ if(!u||!db.sectors.some(s=>s.id===sector)||user.role!=='master'&&!user.sectors.includes(sector))return reply(res,403,{error:'Voluntário ou equipe não autorizados'});
+ const active=body.active===true;
+ if(active&&!u.sectors.includes(sector))u.sectors.push(sector);
+ if(!active){u.sectors=u.sectors.filter(s=>s!==sector);db.skills=db.skills.filter(s=>s.userId!==u.id||db.functions.find(f=>f.id===s.functionId)?.sector!==sector)}
+ db.audit.push({at:new Date().toISOString(),actor:user.id,action:'volunteer_sector',target:u.id,sector,active});await store.save(db);return reply(res,200,{sectors:u.sectors});
+}
 if(url.pathname==='/api/skills'&&req.method==='POST'){
  if(!['master','general','sector'].includes(user.role))return reply(res,403,{error:'Sem permissão'});
  const f=db.functions.find(x=>x.id===body.functionId),u=db.users.find(x=>x.id===body.userId);
