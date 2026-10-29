@@ -308,6 +308,15 @@ if(url.pathname==='/api/birthdays/month'&&req.method==='GET'){
  const people=db.users.filter(u=>(user.role==='master'||u.sectors.some(s=>user.sectors.includes(s)))&&u.profile?.birthDate?.slice(5,7)===String(month).padStart(2,'0')).map(u=>({id:u.id,name:u.name,day:Number(u.profile.birthDate.slice(8,10))})).sort((a,b)=>a.day-b.day||a.name.localeCompare(b.name));
  return reply(res,200,{month,people});
 }
+if(url.pathname==='/api/skills'&&req.method==='GET'){
+ if(!['master','general','sector'].includes(user.role))return reply(res,403,{error:'Sem permissão'});
+ return reply(res,200,{skills:db.skills.filter(s=>{const f=db.functions.find(x=>x.id===s.functionId);return f&&(user.role==='master'||user.sectors.includes(f.sector))})});
+}
+if(url.pathname==='/api/functions/automatic'&&req.method==='POST'){
+ if(!['master','general'].includes(user.role))return reply(res,403,{error:'Sem permissão'});
+ const f=db.functions.find(x=>x.id===body.functionId);if(!f||user.role!=='master'&&!user.sectors.includes(f.sector))return reply(res,403,{error:'Função não autorizada'});
+ f.automatic=body.automatic===true;db.audit.push({at:new Date().toISOString(),actor:user.id,action:'function_automatic',target:f.id,automatic:f.automatic});await store.save(db);return reply(res,200,{function:f});
+}
 if(url.pathname==='/api/functions'&&req.method==='GET')return reply(res,200,{functions:db.functions});
 if(url.pathname==='/api/functions'&&req.method==='POST'){
  if(!['master','general'].includes(user.role))return reply(res,403,{error:'Sem permissão'});
@@ -321,7 +330,7 @@ if(url.pathname==='/api/skills'&&req.method==='POST'){
  const f=db.functions.find(x=>x.id===body.functionId),u=db.users.find(x=>x.id===body.userId);
  if(!f||!u||!u.sectors.includes(f.sector)||user.role!=='master'&&!user.sectors.includes(f.sector))return reply(res,403,{error:'Equipe ou função não autorizada'});
  const old=db.skills.find(s=>s.userId===u.id&&s.functionId===f.id);
- if(old)old.approved=body.approved===true;else db.skills.push({userId:u.id,functionId:f.id,approved:body.approved===true});
+ const level=String(body.level||old?.level||'estagiario').toLowerCase();if(!['estagiario','iniciante','intermediario','avancado','diretor'].includes(level))return reply(res,400,{error:'Nível inválido'});if(old){old.approved=body.approved===true;old.level=level}else db.skills.push({userId:u.id,functionId:f.id,approved:body.approved===true,level});
  db.audit.push({at:new Date().toISOString(),actor:user.id,action:'skill_validation',target:u.id,functionId:f.id,approved:body.approved===true});await store.save(db);return reply(res,200,{ok:true});
 }
 if(url.pathname==='/api/unavailability'&&req.method==='GET'){
