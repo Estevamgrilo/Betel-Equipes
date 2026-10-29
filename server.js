@@ -156,7 +156,7 @@ if(url.pathname==='/api/courses/progress'&&req.method==='POST'){
  if(index<0)return reply(res,404,{error:'Aula não encontrada'});
  if(index>0&&!db.courseProgress[user.id+'|'+course.id+'|'+course.lessons[index-1].id]?.completed)return reply(res,403,{error:'Conclua a aula anterior primeiro'});
  const duration=Number(body.duration),start=Number(body.start),end=Number(body.end),rate=Number(body.playbackRate||1);
- if(!Number.isFinite(duration)||duration<1||duration>86400||!Number.isFinite(start)||!Number.isFinite(end)||start<0||end>duration+1||end<=start||end-start>25||!Number.isFinite(rate)||rate<0.25||rate>2.1)return reply(res,400,{error:'Trecho de reprodução inválido'});
+ if(!Number.isFinite(duration)||duration<1||duration>86400||!Number.isFinite(start)||!Number.isFinite(end)||start<0||end>duration+1||end<=start||end-start>25||!Number.isFinite(rate)||rate<0.25||rate>4.1)return reply(res,400,{error:'Trecho de reprodução inválido'});
  const key=user.id+'|'+course.id+'|'+body.lessonId;
  const p=db.courseProgress[key]||{duration,segments:[],percent:0,completed:false,lastAt:0};
  if(p.completed)return reply(res,200,{percent:100,completed:true,resumeAt:p.resumeAt||0});
