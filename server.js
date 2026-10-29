@@ -9,7 +9,7 @@ const PORT=Number(process.env.PORT||3000), ROOT=process.cwd(), DB=path.join(ROOT
 fs.mkdirSync(path.dirname(DB),{recursive:true});
 const load=()=>fs.existsSync(DB)?JSON.parse(fs.readFileSync(DB,'utf8')):{users:[],invites:[],sessions:[],audit:[],sectors:[{id:'som',name:'Sonoplastia'},{id:'projecao',name:'Projeção'},{id:'iluminacao',name:'Iluminação'},{id:'transmissao',name:'Transmissão'},{id:'midia',name:'Mídia'}]};
 const defaultSlots=[{day:5,time:'19:00',title:'Culto de sexta-feira',enabled:true,sectors:['som','projecao','iluminacao','midia']},{day:6,time:'19:00',title:'Culto de sábado',enabled:true,sectors:['som','projecao','iluminacao','midia']},...['09:00','10:15','19:00'].map(time=>({day:0,time,title:'Culto de domingo',enabled:true,sectors:['som','projecao','iluminacao','midia']}))];
-const normalize=db=>{db.sectors??=[{id:'som',name:'Sonoplastia'},{id:'projecao',name:'Projeção'},{id:'iluminacao',name:'Iluminação'},{id:'transmissao',name:'Transmissão'},{id:'midia',name:'Mídia'}];db.events??=[];db.assignments??=[];db.functions??=[];db.skills??=[];db.unavailability??=[];db.proposals??=[];db.cycles??=[];db.cycleConfig??=null;return db};
+const normalize=db=>{db.sectors??=[{id:'som',name:'Sonoplastia'},{id:'projecao',name:'Projeção'},{id:'iluminacao',name:'Iluminação'},{id:'transmissao',name:'Transmissão'},{id:'midia',name:'Mídia'}];db.events??=[];db.assignments??=[];db.functions??=[];db.skills??=[];db.unavailability??=[];db.proposals??=[];db.cycles??=[];db.cycleConfig??=null;db.courses??=[];return db};
 const save=db=>{const temp=DB+'.tmp';fs.writeFileSync(temp,JSON.stringify(db,null,2),{mode:0o600});fs.renameSync(temp,DB)};
 const store=await createStore({databaseUrl:process.env.DATABASE_URL,localLoad:load,localSave:save});
 let requestQueue=Promise.resolve();
@@ -17,7 +17,7 @@ const id=()=>crypto.randomUUID();
 const hash=(pw,salt=crypto.randomBytes(16).toString('hex'))=>salt+':'+crypto.scryptSync(pw,salt,64).toString('hex');
 const valid=(pw,stored)=>{try{const [salt]=stored.split(':');return crypto.timingSafeEqual(Buffer.from(hash(pw,salt).split(':')[1],'hex'),Buffer.from(stored.split(':')[1],'hex'))}catch{return false}};
 const reply=(res,status,data)=>{res.writeHead(status,{'Referrer-Policy':'no-referrer','X-Frame-Options':'DENY','Content-Security-Policy':"default-src 'none'; frame-ancestors 'none'",'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Permissions-Policy':'camera=(), microphone=(), geolocation=()','Cross-Origin-Resource-Policy':'same-origin'});res.end(JSON.stringify(data))};
-const read=async req=>{let b='';for await(const chunk of req){b+=chunk;if(b.length>30000)throw Error('Dados muito grandes')}return b?JSON.parse(b):{}};
+const read=async req=>{let b='';for await(const chunk of req){b+=chunk;if(b.length>250000)throw Error('Dados muito grandes')}return b?JSON.parse(b):{}};
 const token=()=>crypto.randomBytes(32).toString('hex');
 const auth=(req,db)=>{const t=(req.headers.authorization||'').replace(/^Bearer /,'');const s=db.sessions.find(s=>s.tokenHash===crypto.createHash('sha256').update(t).digest('hex')&&s.expires>Date.now());return db.users.find(u=>u.id===s?.userId)};
 // Limite básico por IP para rotas de autenticação (somente processo único).
@@ -83,6 +83,32 @@ if(url.pathname==='/api/admin/user'&&req.method==='POST'){
 if(url.pathname==='/api/admin/user-history'&&req.method==='GET'){
  if(user.role!=='master')return reply(res,403,{error:'Somente Master'});
  const target=url.searchParams.get('userId');return reply(res,200,{audit:db.audit.filter(a=>a.target===target||a.actor===target).slice(-100).reverse()});
+}
+if(url.pathname==='/api/courses'&&req.method==='GET'){
+ const allowed=db.courses.filter(c=>user.role==='master'||Array.isArray(c.sectors)&&c.sectors.some(s=>(user.sectors||[]).includes(s)));
+ return reply(res,200,{courses:allowed.map(c=>({...c,lessons:(c.lessons||[]).map(l=>({...l}))})),sectors:db.sectors});
+}
+if(url.pathname==='/api/courses'&&req.method==='POST'){
+ if(user.role!=='master')return reply(res,403,{error:'Somente o Master pode cadastrar cursos'});
+ const title=String(body.title||'').trim().slice(0,120),description=String(body.description||'').trim().slice(0,1000);
+ const sectors=Array.isArray(body.sectors)?[...new Set(body.sectors)].filter(s=>db.sectors.some(x=>x.id===s)):[],raw=body.thumbnail;
+ if(!title||!sectors.length)return reply(res,400,{error:'Informe o título e pelo menos uma equipe'});
+ if(raw&&!(typeof raw==='string'&&/^data:image\/(?:jpeg|png|webp);base64,[a-zA-Z0-9+/=]+$/.test(raw)&&raw.length<=180000))return reply(res,400,{error:'Imagem inválida ou muito grande'});
+ const lessons=Array.isArray(body.lessons)?body.lessons:[];
+ if(lessons.length>150)return reply(res,400,{error:'Limite de 150 aulas por curso'});
+ const youtubeId=u=>{try{const v=new URL(u);if(v.protocol!=='https:')return null;if(['youtu.be','www.youtu.be'].includes(v.hostname))return /^[a-zA-Z0-9_-]{11}$/.test(v.pathname.slice(1))?v.pathname.slice(1):null;if(['youtube.com','www.youtube.com','m.youtube.com','www.youtube-nocookie.com'].includes(v.hostname)){const x=v.pathname.startsWith('/shorts/')||v.pathname.startsWith('/embed/')?v.pathname.split('/')[2]:v.searchParams.get('v');return /^[a-zA-Z0-9_-]{11}$/.test(x||'')?x:null}}catch{}return null};
+ const clean=[];for(let i=0;i<lessons.length;i++){const l=lessons[i],name=String(l.title||'').trim().slice(0,140),url=String(l.youtube||'').trim(),videoId=youtubeId(url);if(!name||!videoId)return reply(res,400,{error:'Aula '+(i+1)+': informe título e link válido do YouTube'});clean.push({id:typeof l.id==='string'&&l.id.length<60?l.id:id(),title:name,youtube:'https://www.youtube.com/watch?v='+videoId,videoId,order:i+1})}
+ const existing=body.id?db.courses.find(x=>x.id===body.id):null;
+ if(body.id&&!existing)return reply(res,404,{error:'Curso não encontrado'});
+ const course={id:existing?.id||id(),title,description,sectors,thumbnail:raw||'',lessons:clean,updatedAt:new Date().toISOString(),createdAt:existing?.createdAt||new Date().toISOString()};
+ if(existing)Object.assign(existing,course);else db.courses.push(course);
+ db.audit.push({at:new Date().toISOString(),actor:user.id,action:existing?'course_update':'course_create',target:course.id,courseTitle:title});
+ await store.save(db);return reply(res,200,{ok:true,course});
+}
+if(url.pathname==='/api/courses/delete'&&req.method==='POST'){
+ if(user.role!=='master')return reply(res,403,{error:'Somente Master'});
+ const course=db.courses.find(x=>x.id===body.id);if(!course)return reply(res,404,{error:'Curso não encontrado'});
+ db.courses=db.courses.filter(x=>x.id!==course.id);db.audit.push({at:new Date().toISOString(),actor:user.id,action:'course_delete',target:course.id,courseTitle:course.title});await store.save(db);return reply(res,200,{ok:true});
 }
 if(url.pathname==='/api/sectors'&&req.method==='GET')return reply(res,200,{sectors:db.sectors});
 if(url.pathname==='/api/sectors'&&req.method==='POST'){
@@ -257,4 +283,4 @@ if(user.role!=='master')return reply(res,403,{error:'Somente master'});return re
 if(url.pathname==='/api/invites'&&req.method==='POST'){if(!['master','general'].includes(user.role))return reply(res,403,{error:'Sem permissão'});const sectors=Array.isArray(body.sectors)?body.sectors.filter(x=>db.sectors.some(s=>s.id===x)&& (user.role==='master'||user.sectors.includes(x))).slice(0,20):[];const code=crypto.randomBytes(5).toString('hex').toUpperCase();db.invites.push({code,sectors,used:false,expires:Date.now()+7*86400000,createdBy:user.id});db.audit.push({at:new Date().toISOString(),action:'invite',actor:user.id});await store.save(db);return reply(res,201,{code,expiresInDays:7})}
 if(url.pathname==='/api/users'&&req.method==='GET'){if(!['master','general','sector'].includes(user.role))return reply(res,403,{error:'Sem permissão'});return reply(res,200,{users:db.users.filter(u=>user.role==='master'||u.sectors.some(s=>user.sectors.includes(s))).map(publicUser)})}
 return reply(res,404,{error:'Rota não encontrada'})}catch(e){console.error('API error:',e.message);return reply(res,400,{error:'Requisição inválida'})}}finally{release()}}
-const file=url.pathname==='/'?'index.html':url.pathname.slice(1);const full=path.resolve(ROOT,'public',file);if(!full.startsWith(path.resolve(ROOT,'public')+path.sep))return res.writeHead(403).end();fs.readFile(full,(err,data)=>{if(err)return res.writeHead(404).end('Não encontrado');res.writeHead(200,{'Referrer-Policy':'no-referrer','X-Frame-Options':'DENY','Content-Security-Policy':"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",'Content-Type':full.endsWith('.html')?'text/html; charset=utf-8':full.endsWith('.js')?'application/javascript; charset=utf-8':full.endsWith('.css')?'text/css; charset=utf-8':full.endsWith('.png')?'image/png':'text/plain; charset=utf-8','X-Content-Type-Options':'nosniff','Permissions-Policy':'camera=(), microphone=(), geolocation=()','Cross-Origin-Resource-Policy':'same-origin'});res.end(data)})}).listen(PORT,()=>console.log(`Betel Equipes: http://localhost:${PORT}`));
+const file=url.pathname==='/'?'index.html':url.pathname.slice(1);const full=path.resolve(ROOT,'public',file);if(!full.startsWith(path.resolve(ROOT,'public')+path.sep))return res.writeHead(403).end();fs.readFile(full,(err,data)=>{if(err)return res.writeHead(404).end('Não encontrado');res.writeHead(200,{'Referrer-Policy':'no-referrer','X-Frame-Options':'DENY','Content-Security-Policy':"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://i.ytimg.com; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",'Content-Type':full.endsWith('.html')?'text/html; charset=utf-8':full.endsWith('.js')?'application/javascript; charset=utf-8':full.endsWith('.css')?'text/css; charset=utf-8':full.endsWith('.png')?'image/png':'text/plain; charset=utf-8','X-Content-Type-Options':'nosniff','Permissions-Policy':'camera=(), microphone=(), geolocation=()','Cross-Origin-Resource-Policy':'same-origin'});res.end(data)})}).listen(PORT,()=>console.log(`Betel Equipes: http://localhost:${PORT}`));
