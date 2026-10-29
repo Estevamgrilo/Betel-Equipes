@@ -86,7 +86,7 @@ if(url.pathname==='/api/admin/user-history'&&req.method==='GET'){
 }
 if(url.pathname==='/api/courses/progress'&&req.method==='GET'){
  const result={};for(const course of db.courses){if(user.role!=='master'&&!course.sectors.some(s=>(user.sectors||[]).includes(s)))continue;
- const rows=course.lessons.map(l=>{const p=db.courseProgress[user.id+'|'+course.id+'|'+l.id];return {lessonId:l.id,percent:p?.percent||0,completed:!!p?.completed,duration:p?.duration||0}});
+ const rows=course.lessons.map(l=>{const p=db.courseProgress[user.id+'|'+course.id+'|'+l.id];return {lessonId:l.id,percent:p?.percent||0,completed:!!p?.completed,duration:p?.duration||0,resumeAt:p?.resumeAt||0}});
  result[course.id]={lessons:rows,percent:rows.length?Math.round(rows.filter(r=>r.completed).length/rows.length*100):0};}
  return reply(res,200,{progress:result});
 }
@@ -96,20 +96,20 @@ if(url.pathname==='/api/courses/progress'&&req.method==='POST'){
  const index=course.lessons.findIndex(l=>l.id===body.lessonId);
  if(index<0)return reply(res,404,{error:'Aula não encontrada'});
  if(index>0&&!db.courseProgress[user.id+'|'+course.id+'|'+course.lessons[index-1].id]?.completed)return reply(res,403,{error:'Conclua a aula anterior primeiro'});
- const duration=Number(body.duration),start=Number(body.start),end=Number(body.end);
- if(!Number.isFinite(duration)||duration<1||duration>86400||!Number.isFinite(start)||!Number.isFinite(end)||start<0||end>duration+1||end<=start||end-start>12)return reply(res,400,{error:'Trecho de reprodução inválido'});
+ const duration=Number(body.duration),start=Number(body.start),end=Number(body.end),rate=Number(body.playbackRate||1);
+ if(!Number.isFinite(duration)||duration<1||duration>86400||!Number.isFinite(start)||!Number.isFinite(end)||start<0||end>duration+1||end<=start||end-start>25||!Number.isFinite(rate)||rate<0.25||rate>2.1)return reply(res,400,{error:'Trecho de reprodução inválido'});
  const key=user.id+'|'+course.id+'|'+body.lessonId;
  const p=db.courseProgress[key]||{duration,segments:[],percent:0,completed:false,lastAt:0};
- if(p.completed)return reply(res,200,{percent:100,completed:true});
+ if(p.completed)return reply(res,200,{percent:100,completed:true,resumeAt:p.resumeAt||0});
  if(p.duration&&Math.abs(p.duration-duration)>2)return reply(res,409,{error:'Duração do vídeo alterada; atualize a página'});
  const now=Date.now(),elapsed=p.lastAt?(now-p.lastAt)/1000:12;
- if(elapsed<0.8||end-start>Math.min(12,elapsed+2))return reply(res,429,{error:'Aguarde a reprodução real'});
- p.lastAt=now;p.duration=duration;p.segments.push([start,Math.min(end,duration)]);
+ if(elapsed<0.8||end-start>Math.min(25,elapsed*rate+2))return reply(res,429,{error:'Aguarde a reprodução real'});
+ p.lastAt=now;p.duration=duration;p.resumeAt=Math.min(end,duration);p.segments.push([start,Math.min(end,duration)]);
  p.segments.sort((a,b)=>a[0]-b[0]);const merged=[];for(const segment of p.segments){const last=merged[merged.length-1];if(last&&segment[0]<=last[1]+0.2)last[1]=Math.max(last[1],segment[1]);else merged.push(segment.slice())}
  p.segments=merged;const watched=merged.reduce((n,s)=>n+s[1]-s[0],0);
  p.percent=Math.min(100,Math.floor(watched/duration*100));p.completed=watched>=duration*0.95;
  if(p.completed)p.percent=100;db.courseProgress[key]=p;await store.save(db);
- return reply(res,200,{percent:p.percent,completed:p.completed});
+ return reply(res,200,{percent:p.percent,completed:p.completed,resumeAt:p.resumeAt});
 }
 if(url.pathname==='/api/courses'&&req.method==='GET'){
  const allowed=db.courses.filter(c=>user.role==='master'||Array.isArray(c.sectors)&&c.sectors.some(s=>(user.sectors||[]).includes(s)));
