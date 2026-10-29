@@ -10,7 +10,7 @@ const PORT=Number(process.env.PORT||3000), ROOT=process.cwd(), DB=path.join(ROOT
 fs.mkdirSync(path.dirname(DB),{recursive:true});
 const load=()=>fs.existsSync(DB)?JSON.parse(fs.readFileSync(DB,'utf8')):{users:[],invites:[],sessions:[],audit:[],sectors:[{id:'som',name:'Sonoplastia'},{id:'projecao',name:'Projeção'},{id:'iluminacao',name:'Iluminação'},{id:'transmissao',name:'Transmissão'},{id:'midia',name:'Mídia'}]};
 const recurringTransmission=(day,time)=>day===0&&time==='10:15'?'yes':'no';
-const defaultSlots=[{day:5,time:'19:00',title:'Culto de sexta-feira',enabled:true,sectors:['som','projecao','iluminacao','midia']},{day:6,time:'19:00',title:'Culto de sábado',enabled:true,sectors:['som','projecao','iluminacao','midia']},...['09:00','10:15','19:00'].map(time=>({day:0,time,title:'Culto de domingo',enabled:true,sectors:['som','projecao','iluminacao','midia']}))];
+const defaultSlots=[{day:5,time:'19:00',title:'Culto de sexta-feira',enabled:true,sectors:['som','projecao','iluminacao','midia']},{day:6,time:'19:00',title:'Culto de sábado',enabled:true,sectors:['som','projecao','iluminacao','midia']},...['09:00','10:15','19:00'].map(time=>({day:0,time,title:'Culto de domingo',enabled:true,sectors:time==='10:15'?['som','projecao','iluminacao','midia','transmissao']:['som','projecao','iluminacao','midia']}))];
 const normalize=db=>{db.sectors??=[{id:'som',name:'Sonoplastia'},{id:'projecao',name:'Projeção'},{id:'iluminacao',name:'Iluminação'},{id:'transmissao',name:'Transmissão'},{id:'midia',name:'Mídia'}];db.events??=[];db.assignments??=[];db.functions??=[];db.skills??=[];db.unavailability??=[];db.proposals??=[];db.cycles??=[];db.cycleConfig??=null;db.courses??=[];db.courseProgress??={};db.passwordResets??=[];ensureNotifications(db);return db};
 const save=db=>{const temp=DB+'.tmp';fs.writeFileSync(temp,JSON.stringify(db,null,2),{mode:0o600});fs.renameSync(temp,DB)};
 const store=await createStore({databaseUrl:process.env.DATABASE_URL,localLoad:load,localSave:save});
@@ -43,7 +43,7 @@ function prepareUpcomingCycleDrafts(db){
    for(const slot of slots.filter(x=>x.day===day)){
     const existing=db.events.find(e=>e.date===date&&e.time===slot.time);
     if(existing){eventIds.push(existing.id);continue}
-    const e={id:id(),title:slot.title,date,time:slot.time,sectors:slot.sectors,transmission:recurringTransmission(day,slot.time),recurringKey:day+':'+slot.time,cycleId:cycle.id,createdBy:'system',createdAt:new Date().toISOString()};
+    const e={id:id(),title:slot.title,date,time:slot.time,sectors:slot.sectors,transmission:slot.sectors.includes('transmissao')?'yes':'no',recurringKey:day+':'+slot.time,cycleId:cycle.id,createdBy:'system',createdAt:new Date().toISOString()};
     db.events.push(e);eventIds.push(e.id);
    }
   }
@@ -295,7 +295,7 @@ if(url.pathname==='/api/recurrence/generate'&&req.method==='POST'){
  for(let t=dateUTC(cycle.start);t<=dateUTC(cycle.end);t+=86400000){const day=new Date(t).getUTCDay(),date=new Date(t).toISOString().slice(0,10);
   for(const slot of slots.filter(x=>x.day===day)){
    if(db.events.some(e=>e.date===date&&e.time===slot.time&&e.recurringKey===`${day}:${slot.time}`)){skipped++;continue}
-   const e={id:id(),title:slot.title,date,time:slot.time,sectors:slot.sectors,transmission:recurringTransmission(day,slot.time),recurringKey:`${day}:${slot.time}`,cycleId:cycle.id,createdBy:user.id,createdAt:new Date().toISOString()};db.events.push(e);created.push(e);
+   const e={id:id(),title:slot.title,date,time:slot.time,sectors:slot.sectors,transmission:slot.sectors.includes('transmissao')?'yes':'no',recurringKey:`${day}:${slot.time}`,cycleId:cycle.id,createdBy:user.id,createdAt:new Date().toISOString()};db.events.push(e);created.push(e);
   }
  }
  db.audit.push({at:new Date().toISOString(),actor:user.id,action:'recurrence_generate',cycleId:cycle.id,created:created.length,skipped});await store.save(db);
@@ -345,6 +345,29 @@ if(url.pathname==='/api/unavailability'&&req.method==='POST'){
  if(!/^\d{4}-\d{2}-\d{2}$/.test(from)||!/^\d{4}-\d{2}-\d{2}$/.test(to)||from>to||!Number.isFinite(Date.parse(from))||!Number.isFinite(Date.parse(to)))return reply(res,400,{error:'Datas inválidas'});
  if(db.unavailability.some(x=>x.userId===user.id&&x.from<=to&&x.to>=from))return reply(res,409,{error:'Uma ou mais datas já estão cadastradas como indisponíveis. Escolha um período sem sobreposição.'});
  db.unavailability.push({id:id(),userId:user.id,from,to});db.audit.push({at:new Date().toISOString(),actor:user.id,action:'unavailability_create'});await store.save(db);return reply(res,201,{ok:true});
+}
+if(url.pathname==='/api/smart-cycle/generate'&&req.method==='POST'){
+ if(!['master','general'].includes(user.role))return reply(res,403,{error:'Sem permissão'});
+ const slots=(db.recurrenceSlots??defaultSlots).filter(s=>s.enabled);
+ if(!slots.length)return reply(res,409,{error:'Configure ao menos um horário recorrente'});
+ if(!db.cycleConfig){const anchor=/^\\d{4}-\\d{2}-\\d{2}$/.test(body.anchor||'')?body.anchor:new Date().toISOString().slice(0,10);db.cycleConfig={anchor,configuredBy:user.id,configuredAt:new Date().toISOString()}}
+ const today=new Date().toISOString().slice(0,10),due=dueCycles(db.cycleConfig.anchor,today,db.cycles);
+ for(const w of due){const cycle={...w,id:id(),status:'pending_review',createdAt:new Date().toISOString(),createdBy:user.id};db.cycles.push(cycle)}
+ const cycle=db.cycles.find(x=>x.start<=today&&x.end>=today)||db.cycles.find(x=>x.end>=today)||db.cycles.at(-1);
+ if(!cycle)return reply(res,409,{error:'Nenhum ciclo elegível. Confira a data inicial'});
+ const eventIds=[];let created=0;
+ for(let t=dateUTC(cycle.start);t<=dateUTC(cycle.end);t+=86400000){const day=new Date(t).getUTCDay(),date=new Date(t).toISOString().slice(0,10);
+  for(const slot of slots.filter(s=>s.day===day)){
+   let e=db.events.find(x=>x.date===date&&x.time===slot.time&&x.recurringKey===day+':'+slot.time);
+   if(!e){e={id:id(),title:slot.title,date,time:slot.time,sectors:[...slot.sectors],transmission:slot.sectors.includes('transmissao')?'yes':'no',recurringKey:day+':'+slot.time,cycleId:cycle.id,createdBy:user.id,createdAt:new Date().toISOString()};db.events.push(e);created++}
+   eventIds.push(e.id);
+  }
+ }
+ const existing=db.proposals.find(p=>p.status==='draft'&&p.cycleId===cycle.id&&p.smartCycle);
+ if(existing){await store.save(db);return reply(res,200,{proposal:existing,cycle,created,existing:true})}
+ const result=propose(db,eventIds),proposal={id:id(),cycleId:cycle.id,smartCycle:true,createdBy:user.id,createdAt:new Date().toISOString(),status:'draft',...result};db.proposals.push(proposal);
+ db.audit.push({at:new Date().toISOString(),actor:user.id,action:'smart_cycle_generate',cycleId:cycle.id,created});await store.save(db);
+ return reply(res,201,{proposal,cycle,created});
 }
 if(url.pathname==='/api/schedule/preview'&&req.method==='POST'){
  if(!['master','general'].includes(user.role))return reply(res,403,{error:'Sem permissão'});
