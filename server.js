@@ -25,7 +25,9 @@ const loginAttempts=new Map();
 const limited=(req,route)=>{const key=(req.socket.remoteAddress||'unknown')+':'+route;const now=Date.now();const item=loginAttempts.get(key);if(!item||item.until<now){loginAttempts.set(key,{count:1,until:now+15*60_000});return false}item.count++;return item.count>15};
 const SESSION_MS=12*60*60*1000;
 const pruneSessions=db=>{const now=Date.now();db.sessions=db.sessions.filter(s=>s.expires>now&&db.users.some(u=>u.id===s.userId));};
-const publicUser=u=>({id:u.id,name:u.name,email:u.email,role:u.role,sectors:u.sectors});
+const publicUser=u=>({id:u.id,name:u.name,email:u.email,role:u.role,sectors:u.sectors,profileComplete:!!u.profileComplete});
+const profileFields=['name','address','city','state','postalCode','phone','birthDate','education','course','profession','maritalStatus','hasChildren','children','favoriteFood','hobbies','interests'];
+const cleanProfile=(p,base={})=>{const out={...base};for(const k of profileFields){if(!(k in p))continue;const v=p[k];if(k==='children'){if(!Array.isArray(v)||v.length>20)throw Error('Informe até 20 filhos');out.children=v.map(x=>({name:String(x.name||'').trim().slice(0,100),birthDate:String(x.birthDate||'').slice(0,10)}));if(out.children.some(x=>x.birthDate&&!/^\d{4}-\d{2}-\d{2}$/.test(x.birthDate)))throw Error('Data de nascimento inválida')}else if(k==='interests'){out.interests=Array.isArray(v)?v.slice(0,30).map(x=>String(x).slice(0,80)):[]}else if(k==='hasChildren'){out.hasChildren=v===true}else{out[k]=String(v??'').trim().slice(0,k==='address'?250:150)}}return out};
 http.createServer(async(req,res)=>{const url=new URL(req.url,'http://localhost');if(req.method==='GET'&&url.pathname==='/healthz')return reply(res,200,{status:'ok',storage:store.mode});if(url.pathname.startsWith('/api/')){
 if(req.method==='POST'&&['/api/login','/api/register','/api/setup'].includes(url.pathname)&&limited(req,url.pathname))return reply(res,429,{error:'Muitas tentativas. Aguarde 15 minutos.'});
 const previous=requestQueue;let release;requestQueue=new Promise(resolve=>{release=resolve});await previous;try{try{const db=normalize(await store.load()),body=req.method==='POST'?await read(req):{};pruneSessions(db);
@@ -35,7 +37,7 @@ if(!process.env.BETEL_SETUP_KEY||body.setupKey!==process.env.BETEL_SETUP_KEY)ret
 if(!body.name||!body.email||String(body.password||'').length<10)return reply(res,400,{error:'Preencha nome, e-mail e senha com 10 caracteres ou mais'});
 const u={id:id(),name:body.name,email:body.email.toLowerCase().trim(),password:hash(body.password),role:'master',sectors:[]};db.users.push(u);db.audit.push({at:new Date().toISOString(),action:'setup',actor:u.id});await store.save(db);return reply(res,201,{user:publicUser(u)})}
 if(url.pathname==='/api/login'&&req.method==='POST'){const u=db.users.find(u=>u.email===String(body.email||'').toLowerCase().trim());if(!u||!valid(body.password||'',u.password))return reply(res,401,{error:'Credenciais inválidas'});const t=token();db.sessions.push({userId:u.id,tokenHash:crypto.createHash('sha256').update(t).digest('hex'),expires:Date.now()+SESSION_MS});await store.save(db);return reply(res,200,{token:t,user:publicUser(u)})}
-if(url.pathname==='/api/register'&&req.method==='POST'){const invite=db.invites.find(i=>i.code===String(body.code||'').toUpperCase()&&!i.used&&i.expires>Date.now());if(!invite)return reply(res,400,{error:'Convite inválido, vencido ou utilizado'});if(!body.name||!body.email||String(body.password||'').length<10)return reply(res,400,{error:'Nome, e-mail e senha de 10 caracteres são obrigatórios'});const email=body.email.toLowerCase().trim();if(db.users.some(u=>u.email===email))return reply(res,409,{error:'E-mail já cadastrado'});const u={id:id(),name:body.name,email,password:hash(body.password),role:'volunteer',sectors:invite.sectors};invite.used=true;db.users.push(u);db.audit.push({at:new Date().toISOString(),action:'register',actor:u.id});await store.save(db);return reply(res,201,{user:publicUser(u)})}
+if(url.pathname==='/api/register'&&req.method==='POST'){const invite=db.invites.find(i=>i.code===String(body.code||'').toUpperCase()&&!i.used&&i.expires>Date.now());if(!invite)return reply(res,400,{error:'Convite inválido, vencido ou utilizado'});if(!body.name||!body.email||String(body.password||'').length<10)return reply(res,400,{error:'Nome, e-mail e senha de 10 caracteres são obrigatórios'});const email=body.email.toLowerCase().trim();if(db.users.some(u=>u.email===email))return reply(res,409,{error:'E-mail já cadastrado'});const u={id:id(),name:body.name,email,password:hash(body.password),role:'volunteer',sectors:invite.sectors,profileComplete:false,profile:{}};invite.used=true;db.users.push(u);db.audit.push({at:new Date().toISOString(),action:'register',actor:u.id});await store.save(db);return reply(res,201,{user:publicUser(u)})}
 const user=auth(req,db);if(!user)return reply(res,401,{error:'Faça login'});
 if(url.pathname==='/api/admin/reset-test-data'&&req.method==='POST'){
  if(user.role!=='master'||user.email!=='estevamgrilo@hotmail.com')return reply(res,403,{error:'Somente o Master autorizado pode executar a limpeza'});
@@ -55,6 +57,33 @@ if(url.pathname==='/api/logout'&&req.method==='POST'){
  return reply(res,200,{ok:true});
 }
 if(url.pathname==='/api/me')return reply(res,200,{user:publicUser(user)});
+if(url.pathname==='/api/profile'&&req.method==='GET')return reply(res,200,{user:publicUser(user),profile:user.profile||{}});
+if(url.pathname==='/api/profile'&&req.method==='POST'){
+ const p=cleanProfile(body,user.profile||{});
+ if(!p.name||!p.phone||!/^\d{4}-\d{2}-\d{2}$/.test(p.birthDate||'')||!p.education||!p.maritalStatus)return reply(res,400,{error:'Preencha nome, telefone, nascimento, escolaridade e situação conjugal'});
+ const old=user.profile||{};user.name=p.name;user.profile=p;user.profileComplete=true;
+ db.audit.push({at:new Date().toISOString(),actor:user.id,action:'profile_update',target:user.id,changed:profileFields.filter(k=>JSON.stringify(old[k])!==JSON.stringify(p[k]))});await store.save(db);return reply(res,200,{ok:true,user:publicUser(user),profile:p});
+}
+if(url.pathname==='/api/admin/users'&&req.method==='GET'){
+ if(user.role!=='master')return reply(res,403,{error:'Somente Master'});
+ return reply(res,200,{users:db.users.map(u=>({...publicUser(u),profile:u.profile||{}}))});
+}
+if(url.pathname==='/api/admin/user'&&req.method==='POST'){
+ if(user.role!=='master')return reply(res,403,{error:'Somente Master'});
+ const target=db.users.find(u=>u.id===body.userId);if(!target)return reply(res,404,{error:'Usuário não encontrado'});
+ const changes={};if(body.profile&&typeof body.profile==='object'&&!Array.isArray(body.profile)){
+  const old=target.profile||{};target.profile=cleanProfile(body.profile,old);target.name=target.profile.name||target.name;target.profileComplete=!!(target.profile.name&&target.profile.phone&&target.profile.birthDate&&target.profile.education&&target.profile.maritalStatus);
+  changes.profileFields=profileFields.filter(k=>JSON.stringify(old[k])!==JSON.stringify(target.profile[k]));
+ }
+ if(typeof body.email==='string'&&body.email.trim().toLowerCase()!==target.email){const email=body.email.trim().toLowerCase();if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||db.users.some(u=>u.id!==target.id&&u.email===email))return reply(res,400,{error:'E-mail inválido ou já utilizado'});changes.email={old:target.email,new:email};target.email=email}
+ if(body.password!==undefined){if(String(body.password).length<10)return reply(res,400,{error:'Senha deve ter pelo menos 10 caracteres'});target.password=hash(body.password);db.sessions=db.sessions.filter(s=>s.userId!==target.id);changes.passwordChanged=true}
+ if(Object.keys(changes).length){db.audit.push({at:new Date().toISOString(),actor:user.id,action:'admin_user_update',target:target.id,changes});await store.save(db)}
+ return reply(res,200,{ok:true,user:{...publicUser(target),profile:target.profile||{}}});
+}
+if(url.pathname==='/api/admin/user-history'&&req.method==='GET'){
+ if(user.role!=='master')return reply(res,403,{error:'Somente Master'});
+ const target=url.searchParams.get('userId');return reply(res,200,{audit:db.audit.filter(a=>a.target===target||a.actor===target).slice(-100).reverse()});
+}
 if(url.pathname==='/api/sectors'&&req.method==='GET')return reply(res,200,{sectors:db.sectors});
 if(url.pathname==='/api/sectors'&&req.method==='POST'){
 if(user.role!=='master')return reply(res,403,{error:'Somente master'});
