@@ -9,7 +9,7 @@ const PORT=Number(process.env.PORT||3000), ROOT=process.cwd(), DB=path.join(ROOT
 fs.mkdirSync(path.dirname(DB),{recursive:true});
 const load=()=>fs.existsSync(DB)?JSON.parse(fs.readFileSync(DB,'utf8')):{users:[],invites:[],sessions:[],audit:[],sectors:[{id:'som',name:'Sonoplastia'},{id:'projecao',name:'Projeção'},{id:'iluminacao',name:'Iluminação'},{id:'transmissao',name:'Transmissão'},{id:'midia',name:'Mídia'}]};
 const defaultSlots=[{day:5,time:'19:00',title:'Culto de sexta-feira',enabled:true,sectors:['som','projecao','iluminacao','midia']},{day:6,time:'19:00',title:'Culto de sábado',enabled:true,sectors:['som','projecao','iluminacao','midia']},...['09:00','10:15','19:00'].map(time=>({day:0,time,title:'Culto de domingo',enabled:true,sectors:['som','projecao','iluminacao','midia']}))];
-const normalize=db=>{db.sectors??=[{id:'som',name:'Sonoplastia'},{id:'projecao',name:'Projeção'},{id:'iluminacao',name:'Iluminação'},{id:'transmissao',name:'Transmissão'},{id:'midia',name:'Mídia'}];db.events??=[];db.assignments??=[];db.functions??=[];db.skills??=[];db.unavailability??=[];db.proposals??=[];db.cycles??=[];db.cycleConfig??=null;db.courses??=[];db.courseProgress??={};return db};
+const normalize=db=>{db.sectors??=[{id:'som',name:'Sonoplastia'},{id:'projecao',name:'Projeção'},{id:'iluminacao',name:'Iluminação'},{id:'transmissao',name:'Transmissão'},{id:'midia',name:'Mídia'}];db.events??=[];db.assignments??=[];db.functions??=[];db.skills??=[];db.unavailability??=[];db.proposals??=[];db.cycles??=[];db.cycleConfig??=null;db.courses??=[];db.courseProgress??={};db.passwordResets??=[];return db};
 const save=db=>{const temp=DB+'.tmp';fs.writeFileSync(temp,JSON.stringify(db,null,2),{mode:0o600});fs.renameSync(temp,DB)};
 const store=await createStore({databaseUrl:process.env.DATABASE_URL,localLoad:load,localSave:save});
 let requestQueue=Promise.resolve();
@@ -29,8 +29,34 @@ const publicUser=u=>({id:u.id,name:u.name,email:u.email,role:u.role,sectors:u.se
 const profileFields=['name','address','city','state','postalCode','phone','birthDate','education','course','profession','maritalStatus','hasChildren','children','favoriteFood','hobbies','interests'];
 const cleanProfile=(p,base={})=>{const out={...base};for(const k of profileFields){if(!(k in p))continue;const v=p[k];if(k==='children'){if(!Array.isArray(v)||v.length>20)throw Error('Informe até 20 filhos');out.children=v.map(x=>({name:String(x.name||'').trim().slice(0,100),birthDate:String(x.birthDate||'').slice(0,10)}));if(out.children.some(x=>x.birthDate&&!/^\d{4}-\d{2}-\d{2}$/.test(x.birthDate)))throw Error('Data de nascimento inválida')}else if(k==='interests'){out.interests=Array.isArray(v)?v.slice(0,30).map(x=>String(x).slice(0,80)):[]}else if(k==='hasChildren'){out.hasChildren=v===true}else{out[k]=String(v??'').trim().slice(0,k==='address'?250:150)}}return out};
 http.createServer(async(req,res)=>{const url=new URL(req.url,'http://localhost');if(req.method==='GET'&&url.pathname==='/healthz')return reply(res,200,{status:'ok',storage:store.mode});if(url.pathname.startsWith('/api/')){
-if(req.method==='POST'&&['/api/login','/api/register','/api/setup'].includes(url.pathname)&&limited(req,url.pathname))return reply(res,429,{error:'Muitas tentativas. Aguarde 15 minutos.'});
+if(req.method==='POST'&&['/api/login','/api/register','/api/setup','/api/forgot-password','/api/reset-password'].includes(url.pathname)&&limited(req,url.pathname))return reply(res,429,{error:'Muitas tentativas. Aguarde 15 minutos.'});
 const previous=requestQueue;let release;requestQueue=new Promise(resolve=>{release=resolve});await previous;try{try{const db=normalize(await store.load()),body=req.method==='POST'?await read(req):{};pruneSessions(db);
+if(url.pathname==='/api/forgot-password'&&req.method==='POST'){
+ const email=String(body.email||'').trim().toLowerCase();
+ if(!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email))return reply(res,400,{error:'Informe um e-mail válido'});
+ const generic={ok:true,message:'Se o e-mail estiver cadastrado, você receberá instruções para redefinir sua senha.'};
+ const target=db.users.find(u=>u.email===email);
+ if(!target)return reply(res,200,generic);
+ const apiKey=process.env.RESEND_API_KEY,from=process.env.BETEL_MAIL_FROM,origin=process.env.BETEL_PUBLIC_URL;
+ if(!apiKey||!from||!origin){console.error('Recuperação de senha: configure RESEND_API_KEY, BETEL_MAIL_FROM e BETEL_PUBLIC_URL');return reply(res,503,{error:'A recuperação de senha por e-mail ainda não está configurada. Contate a administração.'})}
+ const raw=crypto.randomBytes(32).toString('hex'),digest=crypto.createHash('sha256').update(raw).digest('hex');
+ const link=new URL('/redefinir-senha.html',origin);link.searchParams.set('token',raw);
+ try{const response=await fetch('https://api.resend.com/emails',{method:'POST',headers:{Authorization:'Bearer '+apiKey,'Content-Type':'application/json'},body:JSON.stringify({from,to:[email],subject:'Betel Equipes — Redefinição de senha',text:'Recebemos um pedido para redefinir sua senha. Acesse este link em até 30 minutos: '+link.toString()+'\\n\\nSe não foi você, ignore esta mensagem.'})});
+ if(!response.ok){console.error('Falha ao enviar e-mail de redefinição:',response.status);return reply(res,503,{error:'O serviço de recuperação de senha está temporariamente indisponível.'})}
+ db.passwordResets=db.passwordResets.filter(x=>x.userId!==target.id&&x.expires>Date.now());db.passwordResets.push({userId:target.id,digest,expires:Date.now()+30*60*1000});await store.save(db);return reply(res,200,generic)
+ }catch(e){console.error('Erro no envio de recuperação:',e.message);return reply(res,503,{error:'O serviço de recuperação de senha está temporariamente indisponível.'})}
+}
+if(url.pathname==='/api/reset-password'&&req.method==='POST'){
+ const raw=String(body.token||''),password=String(body.password||'');
+ if(!/^[a-f0-9]{64}$/.test(raw)||password.length<10||password.length>256)return reply(res,400,{error:'Link inválido ou senha fora do padrão (10 a 256 caracteres)'});
+ const digest=crypto.createHash('sha256').update(raw).digest('hex');
+ const record=db.passwordResets.find(x=>x.digest===digest&&x.expires>Date.now());
+ if(!record)return reply(res,400,{error:'Link inválido ou expirado. Solicite uma nova recuperação.'});
+ const target=db.users.find(u=>u.id===record.userId);
+ if(!target)return reply(res,400,{error:'Link inválido ou expirado'});
+ target.passwordHash=hash(password);db.sessions=db.sessions.filter(s=>s.userId!==target.id);db.passwordResets=db.passwordResets.filter(x=>x.userId!==target.id);db.audit.push({at:new Date().toISOString(),actor:target.id,action:'password_reset',target:target.id});await store.save(db);
+ return reply(res,200,{ok:true,message:'Senha redefinida. Faça login com sua nova senha.'});
+}
 if(url.pathname==='/api/setup'&&req.method==='POST'){
 if(db.users.length)return reply(res,403,{error:'Configuração inicial já concluída'});
 if(!process.env.BETEL_SETUP_KEY||body.setupKey!==process.env.BETEL_SETUP_KEY)return reply(res,403,{error:'Chave de instalação inválida'});
