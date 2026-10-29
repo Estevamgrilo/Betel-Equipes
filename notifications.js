@@ -27,7 +27,7 @@ export function queueAssignmentNotifications(db,{today=isoDate()}={}){
 export async function sendPendingNotifications(db){
  ensureNotifications(db);
  let changed=false;
- const pending=db.notificationDeliveries.filter(j=>j.status==='pending'&&j.nextAttempt<=Date.now()).slice(0,12);
+ const pending=db.notificationDeliveries.filter(j=>['pending','unconfigured'].includes(j.status)&&j.nextAttempt<=Date.now()).slice(0,12);
  for(const job of pending){
   const n=db.notifications.find(x=>x.id===job.notificationId);
   const u=db.users.find(x=>x.id===n?.userId);
@@ -72,7 +72,7 @@ export async function sendPendingNotifications(db){
     }
    }
   }catch(e){console.error('Falha em notificação',job.channel,e.message)}
-  if(!configured){job.status='unconfigured';changed=true;continue}
+  if(!configured){job.status='unconfigured';job.nextAttempt=Date.now()+60*60*1000;changed=true;continue}
   job.attempts++;
   job.status=ok?'sent':job.attempts>=5?'failed':'pending';
   job.nextAttempt=Date.now()+Math.min(3600000,60000*2**job.attempts);
