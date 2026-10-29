@@ -379,7 +379,7 @@ if(url.pathname==='/api/smart-cycle/generate'&&req.method==='POST'){
   }
  }
  const existing=db.proposals.find(p=>p.status==='draft'&&p.cycleId===cycle.id&&p.smartCycle);
- if(existing){await store.save(db);return reply(res,200,{proposal:existing,cycle,created,existing:true})}
+ if(existing){const result=propose(db,eventIds);existing.proposed=result.proposed;existing.warnings=result.warnings;existing.updatedAt=new Date().toISOString();await store.save(db);return reply(res,200,{proposal:existing,cycle,created,existing:true,regenerated:true})}
  const result=propose(db,eventIds),proposal={id:id(),cycleId:cycle.id,smartCycle:true,createdBy:user.id,createdAt:new Date().toISOString(),status:'draft',...result};db.proposals.push(proposal);
  db.audit.push({at:new Date().toISOString(),actor:user.id,action:'smart_cycle_generate',cycleId:cycle.id,created});await store.save(db);
  return reply(res,201,{proposal,cycle,created});
