@@ -9,6 +9,7 @@ import {ensureNotifications,queueAssignmentNotifications,sendPendingNotification
 const PORT=Number(process.env.PORT||3000), ROOT=process.cwd(), DB=path.join(ROOT,'data','database.json');
 fs.mkdirSync(path.dirname(DB),{recursive:true});
 const load=()=>fs.existsSync(DB)?JSON.parse(fs.readFileSync(DB,'utf8')):{users:[],invites:[],sessions:[],audit:[],sectors:[{id:'som',name:'Sonoplastia'},{id:'projecao',name:'Projeção'},{id:'iluminacao',name:'Iluminação'},{id:'transmissao',name:'Transmissão'},{id:'midia',name:'Mídia'}]};
+const recurringTransmission=(day,time)=>day===0&&time==='10:15'?'yes':'no';
 const defaultSlots=[{day:5,time:'19:00',title:'Culto de sexta-feira',enabled:true,sectors:['som','projecao','iluminacao','midia']},{day:6,time:'19:00',title:'Culto de sábado',enabled:true,sectors:['som','projecao','iluminacao','midia']},...['09:00','10:15','19:00'].map(time=>({day:0,time,title:'Culto de domingo',enabled:true,sectors:['som','projecao','iluminacao','midia']}))];
 const normalize=db=>{db.sectors??=[{id:'som',name:'Sonoplastia'},{id:'projecao',name:'Projeção'},{id:'iluminacao',name:'Iluminação'},{id:'transmissao',name:'Transmissão'},{id:'midia',name:'Mídia'}];db.events??=[];db.assignments??=[];db.functions??=[];db.skills??=[];db.unavailability??=[];db.proposals??=[];db.cycles??=[];db.cycleConfig??=null;db.courses??=[];db.courseProgress??={};db.passwordResets??=[];ensureNotifications(db);return db};
 const save=db=>{const temp=DB+'.tmp';fs.writeFileSync(temp,JSON.stringify(db,null,2),{mode:0o600});fs.renameSync(temp,DB)};
@@ -42,7 +43,7 @@ function prepareUpcomingCycleDrafts(db){
    for(const slot of slots.filter(x=>x.day===day)){
     const existing=db.events.find(e=>e.date===date&&e.time===slot.time);
     if(existing){eventIds.push(existing.id);continue}
-    const e={id:id(),title:slot.title,date,time:slot.time,sectors:slot.sectors,transmission:'undefined',recurringKey:day+':'+slot.time,cycleId:cycle.id,createdBy:'system',createdAt:new Date().toISOString()};
+    const e={id:id(),title:slot.title,date,time:slot.time,sectors:slot.sectors,transmission:recurringTransmission(day,slot.time),recurringKey:day+':'+slot.time,cycleId:cycle.id,createdBy:'system',createdAt:new Date().toISOString()};
     db.events.push(e);eventIds.push(e.id);
    }
   }
@@ -276,6 +277,16 @@ if(url.pathname==='/api/recurrence'&&req.method==='POST'){
  }
  db.recurrenceSlots=slots;db.audit.push({at:new Date().toISOString(),actor:user.id,action:'recurrence_config'});await store.save(db);return reply(res,200,{slots});
 }
+if(url.pathname==='/api/recurrence/cleanup'&&req.method==='POST'){
+ if(!['master','general'].includes(user.role))return reply(res,403,{error:'Sem permissão'});
+ const removable=db.events.filter(e=>e.recurringKey&&e.cycleId&&!db.assignments.some(a=>a.eventId===e.id));
+ const ids=new Set(removable.map(e=>e.id));
+ db.events=db.events.filter(e=>!ids.has(e.id));
+ db.proposals=db.proposals.filter(p=>p.status!=='draft'||!p.proposed?.some(a=>ids.has(a.eventId)));
+ db.audit.push({at:new Date().toISOString(),actor:user.id,action:'recurrence_cleanup',removed:removable.length});
+ await store.save(db);
+ return reply(res,200,{removed:removable.length,preserved:db.events.length});
+}
 if(url.pathname==='/api/recurrence/generate'&&req.method==='POST'){
  if(!['master','general'].includes(user.role))return reply(res,403,{error:'Sem permissão'});
  const cycle=db.cycles.find(c=>c.id===body.cycleId);if(!cycle)return reply(res,404,{error:'Ciclo não encontrado'});
@@ -284,7 +295,7 @@ if(url.pathname==='/api/recurrence/generate'&&req.method==='POST'){
  for(let t=dateUTC(cycle.start);t<=dateUTC(cycle.end);t+=86400000){const day=new Date(t).getUTCDay(),date=new Date(t).toISOString().slice(0,10);
   for(const slot of slots.filter(x=>x.day===day)){
    if(db.events.some(e=>e.date===date&&e.time===slot.time&&e.recurringKey===`${day}:${slot.time}`)){skipped++;continue}
-   const e={id:id(),title:slot.title,date,time:slot.time,sectors:slot.sectors,transmission:'undefined',recurringKey:`${day}:${slot.time}`,cycleId:cycle.id,createdBy:user.id,createdAt:new Date().toISOString()};db.events.push(e);created.push(e);
+   const e={id:id(),title:slot.title,date,time:slot.time,sectors:slot.sectors,transmission:recurringTransmission(day,slot.time),recurringKey:`${day}:${slot.time}`,cycleId:cycle.id,createdBy:user.id,createdAt:new Date().toISOString()};db.events.push(e);created.push(e);
   }
  }
  db.audit.push({at:new Date().toISOString(),actor:user.id,action:'recurrence_generate',cycleId:cycle.id,created:created.length,skipped});await store.save(db);
