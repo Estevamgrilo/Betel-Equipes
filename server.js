@@ -375,6 +375,21 @@ if(url.pathname==='/api/schedule/preview'&&req.method==='POST'){
  if(!eventIds.length)return reply(res,400,{error:'Selecione eventos autorizados'});
  const result=propose(db,eventIds),proposal={id:id(),createdBy:user.id,createdAt:new Date().toISOString(),status:'draft',...result};db.proposals.push(proposal);await store.save(db);return reply(res,201,{proposal});
 }
+if(url.pathname==='/api/schedule/resolve'&&req.method==='POST'){
+ if(!['master','general'].includes(user.role))return reply(res,403,{error:'Sem permissão'});
+ const p=db.proposals.find(x=>x.id===body.proposalId&&x.status==='draft'&&(user.role==='master'||x.createdBy===user.id||x.automaticCycle&&user.role==='general'));
+ const e=db.events.find(x=>x.id===body.eventId),f=db.functions.find(x=>x.id===body.functionId),vol=db.users.find(x=>x.id===body.userId);
+ if(!p||!e||!f||!vol||user.role!=='master'&&!user.sectors.includes(f.sector))return reply(res,403,{error:'Proposta, função ou voluntário não autorizado'});
+ if(!e.sectors.includes(f.sector)||!vol.sectors?.includes(f.sector)||!db.skills.some(s=>s.userId===vol.id&&s.functionId===f.id&&s.approved))return reply(res,409,{error:'Voluntário não habilitado para esta função'});
+ if(f.sector==='transmissao'&&e.transmission!=='yes')return reply(res,409,{error:'Transmissão não autorizada neste culto'});
+ if(db.unavailability.some(a=>a.userId===vol.id&&e.date>=a.from&&e.date<=a.to))return reply(res,409,{error:'Voluntário indisponível nesta data'});
+ const all=[...db.assignments,...p.proposed],time=x=>Date.parse(x.date+'T'+x.time+':00-03:00');
+ if(all.some(a=>a.userId===vol.id&&(()=>{const other=db.events.find(x=>x.id===a.eventId);return other&&Math.abs(time(other)-time(e))<12*3600000})()))return reply(res,409,{error:'Voluntário já escalado ou com descanso inferior a 12 horas'});
+ if(all.some(a=>a.eventId===e.id&&a.sector===f.sector&&a.functionName===f.name))return reply(res,409,{error:'Função já preenchida'});
+ if(!p.warnings.some(w=>w.eventId===e.id&&w.functionId===f.id))return reply(res,409,{error:'Não existe pendência desta função'});
+ p.proposed.push({id:'preview-'+e.id+'-'+f.id,eventId:e.id,sector:f.sector,functionName:f.name,userId:vol.id,proposal:true});p.warnings=p.warnings.filter(w=>!(w.eventId===e.id&&w.functionId===f.id));
+ db.audit.push({at:new Date().toISOString(),actor:user.id,action:'proposal_resolve',target:p.id,eventId:e.id,functionId:f.id,userId:vol.id});await store.save(db);return reply(res,200,{proposal:p});
+}
 if(url.pathname==='/api/schedule/proposals'&&req.method==='GET')return reply(res,200,{proposals:db.proposals.filter(p=>user.role==='master'||p.createdBy===user.id||p.automaticCycle&&user.role==='general')});
 // V11: edição auditada de uma atribuição ainda em rascunho.
 if(url.pathname==='/api/schedule/edit'&&req.method==='POST'){
